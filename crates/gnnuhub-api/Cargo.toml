@@ -13,6 +13,17 @@ repository.workspace = true
 # `cargo test --features tesseract`
 tesseract = ["gnnuhub-ocr/tesseract"]
 
+# 下面两个示例只有在启用 tesseract 时才能编译（它们直接用了
+# `gnnuhub_ocr::TesseractOcr`）。用 `required-features` 声明依赖，
+# 这样默认 feature 下 `cargo test` 不会因为它们而失败。
+[[example]]
+name = "ocr_bench"
+required-features = ["tesseract"]
+
+[[example]]
+name = "ocr_verify"
+required-features = ["tesseract"]
+
 [dependencies]
 gnnuhub-core.workspace = true
 gnnuhub-crypto.workspace = true
