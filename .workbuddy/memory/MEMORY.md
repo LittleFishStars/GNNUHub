@@ -123,8 +123,19 @@
 - 单周课表接口 `/kbcx/xskbcxMobile_cxXsKb.html` 未实测
 - 学籍字段仅映射 12/84，完整对照表在 `tools/js-recon/out/verification.md` 附一
 - 成绩查询未实现（`/cjcx/cjcx_cxDgXscj.html?gnmkdm=N305005`）
-- 验证码自动识别**已有实现**（`TesseractOcr` + `FailoverOcr`，commit `47d3001`），
-  但**真实准确率尚未用登录接口验证**，因此 `tesseract` feature 默认关闭。
-  下一步：跑登录验真值；若准确率不足，考虑**多倍数（4/5/6/7）共识**
-  以缓解「只在 scale 4~8 窗口内正确」这个弱点。
+- 验证码识别**已落地两套引擎**：
+  1. **`BitmapOcr`（推荐，默认开启）**：位图查表。字库内嵌于
+     `crates/gnnuhub-ocr/assets/bitmap_lib.json`（65 条、覆盖 59 字符），
+     由 60 张真实样本构建，对样本集 **240/240 字形精确命中**。
+     入口：`FailoverOcr::recommended()` / `BitmapOcr::embedded()`。
+  2. **`TesseractOcr`（feature `tesseract`，默认关闭）**：通用 OCR，
+     样本集约 78%，作为字库缺条目时的兜底
+     （`FailoverOcr::recommended_with_tesseract()`）。
+- **真实准确率仍待用登录接口验证**（`examples/ocr_verify.rs`，需凭据）。
+  该工具已改造完毕（commit `a7da505`）：默认走位图引擎、**不需要 tesseract**，
+  逐字形打印匹配质量（`=` 精确 / `~N` 模糊距离 N / `!` 未命中），有未命中就
+  跳过提交以省请求。运行：
+  `GNNU_STUDENT_ID=250710078 GNNU_PASSWORD='错密码' cargo run -p gnnuhub-api --example ocr_verify -- 20`
+  留出交叉验证（非循环）参考值：训练 55 张时字形命中 95.8%、整图约 84%。
+- 再抓样本仍有收益：Chao1 估计字库共约 67 条，目前 65 条。
 - 界面层框架未选（用户明确表示稍后再定）
