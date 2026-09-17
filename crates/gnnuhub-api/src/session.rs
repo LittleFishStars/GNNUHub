@@ -139,7 +139,10 @@ impl Session {
             )
             .await?;
 
-        let parsed = parse::parse_basic_info(&html)?;
+        let mut parsed = parse::parse_basic_info(&html)?;
+        // 首页不带学号，用登录时的学号补齐
+        parsed.student_id = self.student_id.clone();
+
         let mut state = self.state.lock().await;
         merge_info(&mut state.info, parsed.clone());
         Ok(parsed)

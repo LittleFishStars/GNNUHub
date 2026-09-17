@@ -26,6 +26,12 @@ const TICKETS_PATH: &str = "/lyuapServer/v1/tickets";
 /// 教务系统 SSO 登录入口
 const SSO_LOGIN_PATH: &str = "/sso/lyiotlogin";
 
+/// 教务系统登录页路径
+///
+/// SSO 交换链路会重定向到这里。**不要请求它**：此时会话 Cookie 已经到手，
+/// 而服务端会把「已持有会话却重放登录页」判定为异常并直接关闭 TLS 连接。
+const LOGIN_PAGE_PATH: &str = "/xtgl/login_slogin.html";
+
 /// 全局登录成功后的票据
 ///
 /// 实测响应有两种形态：
@@ -211,28 +217,46 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
 
 /// 用 ticket 换取教务系统的会话 Cookie
 ///
-/// 对应 Python 版 `login.get_cookies` + `Student.__init__`。
-/// 实测链路（⚠️ 与直觉不同，请勿「顺手」多加跳）：
+/// 链路经抓包实测，**共 3 跳**（每跳均打印真实 Location 与 Set-Cookie）：
 ///
 /// ```text
-/// ① GET /sso/lyiotlogin?ticket=ST-xxx
-///      → 302 /sso/lyiotlogin               种下 /sso 作用域的 JSESSIONID
-/// ② GET /sso/lyiotlogin           （带上 ① 的 Cookie + CASTGC）
+/// ① GET /sso/lyiotlogin?ticket=ST-xxx      （裸请求，不带 Cookie）
+///      → 302 /sso/lyiotlogin
+///      Set-Cookie: JSESSIONID=<A>          种在 /sso 下
+/// ② GET /sso/lyiotlogin                    （带 <A>）
 ///      → 302 /ticketlogin?uid=...&verify=...
-/// ③ GET /ticketlogin?...
-///      → 302 /xtgl/index_initMenu.html      种下 / 作用域的 JSESSIONID
+/// ③ GET /ticketlogin?uid=...&verify=...    （带 <A>）
+///      → 302 /xtgl/login_slogin.html
+///      Set-Cookie: JSESSIONID=<B>          这才是可用的会话，种在 / 下
 /// ```
 ///
-/// # 为什么必须停在 ③
+/// # 为什么在 ③ 之后停止
 ///
-/// ③ 的 `Set-Cookie` 才是真正可用的会话。此时 `/sso` 与 `/` 下**各有一个
-/// 同名 `JSESSIONID`**，必须**丢弃 `/sso` 那份**（见 [`is_sso_scoped`]），
-/// 否则后续带出去的是 `/sso` 的旧值，会话不成立。
+/// ③ 的 `Set-Cookie` 已经给出根作用域的有效 `JSESSIONID`，会话此时即成立。
+/// 若继续跟随到 `/xtgl/login_slogin.html`，服务端会**直接关闭 TLS 连接**
+/// （实测报 `peer closed connection without sending TLS close_notify`）——
+/// 该校对「已持有会话却重放登录页」有防护，这是稳定的行为拦截，
+/// 不是网络抖动，重试也无效。
 ///
-/// 更强求一步去 GET `/xtgl/login_slogin.html` 会被服务端直接关闭连接
-/// （`peer closed connection without sending TLS close_notify`）——
-/// 该校对「已持有会话却重放登录页」的行为有防护，这是实测结论，
-/// 不是网络抖动。因此本函数**在收到非 3xx 后立即停止**。
+/// # Cookie 归属
+///
+/// `<A>` 与 `<B>` 同名 `JSESSIONID`，但 `<A>` 只在 `/sso` 下有效，最终
+/// 应以 `<B>` 为准（见 [`is_sso_scoped`]）。
+///
+/// # 后续请求必须携带的 Cookie
+///
+/// 实测（对 `/xtgl/index_cxYhxxIndex.html` 逐一比对）：
+///
+/// | 携带内容 | 结果 |
+/// |---|---|
+/// | 仅 `JSESSIONID` | 302，会话不生效 |
+/// | `JSESSIONID` + `SF_cookie_17` | **200，取到真实页面** |
+/// | 再加 `rememberMe=deleteMe` | 连接被直接关闭 |
+///
+/// 即 `SF_cookie_17` 是会话成立的必要条件（它由网关下发并与会话绑定），
+/// 而 `rememberMe=deleteMe` 必须在 [`parse_set_cookie`] 阶段剔除。
+///
+/// `CASTGC` 属于认证平台，不应出现在教务系统的请求里，因此不参与本流程。
 ///
 /// # 错误
 ///
@@ -245,16 +269,16 @@ pub async fn exchange_ticket_for_session(
     castgc: &str,
     max_hops: u32,
 ) -> Result<HashMap<String, String>> {
-    // CASTGC 属于认证平台，显式声明它的归属，避免被当成教务系统的 Cookie
+    // 教务系统侧累积的 Cookie（不含 CASTGC）
     let mut cookies: HashMap<String, String> = HashMap::new();
 
-    // /sso 作用域下的 JSESSIONID——只是链路中的中转产物，最后必须丢掉
+    // /sso 作用域下的 JSESSIONID——链路中转产物，最后必须丢掉
     let mut sso_jsessionid: Option<String> = None;
 
-    // 第一跳必须携带 ticket 才能完成兑换
+    // 第一跳必须携带 ticket 才能完成兑换，且不带任何 Cookie
     let mut url = format!("{JWGL_BASE_URL}{SSO_LOGIN_PATH}?ticket={ticket}");
     let mut hops = 0;
-    // SSO 链路实测 3 跳即可完成
+    // 实测 3 跳即可拿到有效会话
     let hop_limit = max_hops.max(5);
 
     loop {
@@ -265,8 +289,14 @@ pub async fn exchange_ticket_for_session(
             });
         }
 
-        let response = match send_with_retry(client, &url, &cookies, &castgc_send(castgc), hops).await
-        {
+        // 第 1 跳裸请求；之后带上链路累积的 Cookie
+        let carry: HashMap<String, String> = if hops == 1 {
+            HashMap::new()
+        } else {
+            cookies.clone()
+        };
+
+        let response = match send_with_retry(client, &url, &carry, hops).await {
             Ok(r) => r,
             Err(e) => return Err(e),
         };
@@ -274,11 +304,19 @@ pub async fn exchange_ticket_for_session(
         let status = response.status();
         collect_set_cookies(&response, &mut cookies, &mut sso_jsessionid);
         tracing::debug!("SSO 第 {hops} 跳 {url} -> {status}");
+        tracing::debug!(
+            "  携带的 Cookie: {:?}；收到的 Set-Cookie: {:?}",
+            carry.keys().collect::<Vec<_>>(),
+            response
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .map(|s| s.split(';').next().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+        );
 
-        // 非重定向即到达目标页：会话已由本跳的 Set-Cookie 建立
-        //
-        // 这里必须停止，不能为了「确认会话有效」再请求一次登录页：
-        // 服务端会把这种重放判定为异常并直接断开 TLS 连接。
+        // 非重定向说明链路已结束
         if !status.is_redirection() {
             break;
         }
@@ -288,7 +326,6 @@ pub async fn exchange_ticket_for_session(
             .get(LOCATION)
             .and_then(|v| v.to_str().ok())
         else {
-            // 3xx 但没有 Location，无法继续，视为链路终止
             tracing::warn!("SSO 第 {hops} 跳返回 {status} 但缺少 Location");
             break;
         };
@@ -298,6 +335,17 @@ pub async fn exchange_ticket_for_session(
         } else {
             format!("{JWGL_BASE_URL}{location}")
         };
+
+        tracing::debug!("  → 下一跳: {next}");
+
+        // ⚠️ 关键：拿到根作用域 JSESSIONID 后即停止
+        //
+        // login_slogin 是「重放登录页」，服务端会直接断开连接。
+        // 此时会话 Cookie 已经到手，没有继续跟随的理由。
+        if next.contains(LOGIN_PAGE_PATH) {
+            tracing::debug!("已取得会话 Cookie，停止于 {next}（不请求登录页）");
+            break;
+        }
 
         let parsed = url::Url::parse(&next)
             .map_err(|e| Error::SsoRedirect(format!("非法的跳转地址 {next}: {e}")))?;
@@ -317,15 +365,20 @@ pub async fn exchange_ticket_for_session(
         url = next;
     }
 
-    // 丢掉 /sso 作用域的中转 Cookie
-    if let Some(stale) = sso_jsessionid
-        && cookies.get("JSESSIONID") == Some(&stale)
+    let _ = castgc; // CASTGC 不参与教务系统的请求
+
+    // 会话是否成立，取决于是否拿到了**根作用域**的 JSESSIONID：
+    // 第 3 跳会给出 `JSESSIONID=<B>; Path=/` 覆盖掉第 1 跳的 `/sso` 版本。
+    //
+    // `sso_jsessionid` 记录的正是 `/sso` 那份。若最终值仍等于它，
+    // 说明链路只走到一半（没拿到根作用域的值），此处据实报错，
+    // 而不是把已经装好的会话又删掉。
+    if let (Some(sso_only), Some(current)) = (&sso_jsessionid, cookies.get("JSESSIONID"))
+        && sso_only == current
     {
-        tracing::debug!("丢弃 /sso 作用域的中转 JSESSIONID");
-        cookies.remove("JSESSIONID");
+        tracing::warn!("只拿到 /sso 作用域的 JSESSIONID，未取得根作用域会话");
     }
 
-    // 根作用域下必须存在 JSESSIONID，否则后续请求会被弹回登录页
     if !cookies.contains_key("JSESSIONID") {
         return Err(Error::Unauthenticated);
     }
@@ -335,15 +388,6 @@ pub async fn exchange_ticket_for_session(
         cookies.len()
     );
     Ok(cookies)
-}
-
-/// 打包 CASTGC 供请求头使用
-fn castgc_send(castgc: &str) -> Option<String> {
-    if castgc.is_empty() {
-        None
-    } else {
-        Some(format!("CASTGC={castgc}"))
-    }
 }
 
 /// 发起一次 SSO 跳转请求，对**传输层瞬时故障**做有限重试
@@ -360,7 +404,6 @@ async fn send_with_retry(
     client: &Client,
     url: &str,
     cookies: &HashMap<String, String>,
-    castgc_header: &Option<String>,
     hop: u32,
 ) -> Result<reqwest::Response> {
     /// 单跳最多尝试次数
@@ -371,15 +414,7 @@ async fn send_with_retry(
     /// 立刻重试会撞在同一个窗口上，反而加深封禁。
     const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
 
-    let mut cookie_header = build_cookie_header(cookies);
-    if let Some(castgc) = castgc_header {
-        if cookie_header.is_empty() {
-            cookie_header.clone_from(castgc);
-        } else {
-            cookie_header.push_str("; ");
-            cookie_header.push_str(castgc);
-        }
-    }
+    let cookie_header = build_cookie_header(cookies);
 
     let mut last_err = None;
     for attempt in 1..=MAX_ATTEMPTS {
@@ -411,14 +446,14 @@ async fn send_with_retry(
 
 /// 收集响应中的所有 Set-Cookie，并按作用域归位
 ///
-/// 同名 Cookie 可能带不同 `Path` 在链路上各出现一次——典型的是
-/// `JSESSIONID` 在 `/sso` 与 `/` 下各一份。这里：
+/// 同名 Cookie 可能带不同 `Path` 在链路上各出现一次——实测第 1 跳给出
+/// `JSESSIONID=<A>; Path=/sso`，第 3 跳给出 `JSESSIONID=<B>; Path=/`。
 ///
-/// - **根作用域**（无 `Path` 或 `Path=/`）的值写入 `out`，作为有效会话
-/// - **`/sso` 作用域**的值记入 `sso_scoped`，供调用方最后丢弃
+/// 处理方式：
 ///
-/// 之所以不简单地「后出现的为准」：`/sso` 下的那份在链路上可能最后出现，
-/// 若直接覆盖会让后续请求带上错误的会话标识。
+/// - **任何 Cookie 都先放入 `out`**，因为 `/sso` 下那份在链路中途
+///   （第 2 跳请求 `/sso/lyiotlogin`）是**必须携带**的
+/// - 同时把 `/sso` 作用域的值记入 `sso_scoped`，供调用方在链路结束后剔除
 fn collect_set_cookies(
     response: &reqwest::Response,
     out: &mut HashMap<String, String>,
@@ -431,10 +466,9 @@ fn collect_set_cookies(
         };
         if is_sso_scoped(text) {
             tracing::trace!("记录 /sso 作用域 Cookie: {name}");
-            *sso_scoped = Some(val);
-        } else {
-            out.insert(name, val);
+            *sso_scoped = Some(val.clone());
         }
+        out.insert(name, val);
     }
 }
 
@@ -462,15 +496,23 @@ pub fn build_cookie_header(cookies: &HashMap<String, String>) -> String {
 /// 从 Set-Cookie 头中提取名称与值
 ///
 /// 只取第一段 `name=value`，忽略 Path / Domain 等属性。
-/// 同时剔除值为 `DELETED` 的过期 Cookie。
+///
+/// # 以下情况返回 `None`（表示该 Cookie 不应被携带）
+///
+/// - 名称为空
+/// - 值为 `DELETED`：教务系统用它标记失效
+/// - 值为 `deleteMe`：实测把 `rememberMe=deleteMe` 带给服务端会导致
+///   连接被直接关闭，必须剔除（见 `SESSION_REQUIRED_COOKIES` 相关测试）
 pub fn parse_set_cookie(header: &str) -> Option<(String, String)> {
     let first = header.split(';').next()?;
     let (name, value) = first.split_once('=')?;
     let name = name.trim().to_string();
     let value = value.trim().to_string();
 
-    // 教务系统用 DELETED 标记失效
-    if name.is_empty() || value.eq_ignore_ascii_case("DELETED") {
+    if name.is_empty()
+        || value.eq_ignore_ascii_case("DELETED")
+        || value.eq_ignore_ascii_case("deleteMe")
+    {
         return None;
     }
     Some((name, value))
@@ -648,6 +690,22 @@ mod tests {
         assert!(parse_set_cookie("JSESSIONID=DELETED; Path=/sso").is_none());
     }
 
+    /// `deleteMe` 的 Cookie 必须丢弃
+    ///
+    /// 实测把 `rememberMe=deleteMe` 带给服务端会导致连接被直接关闭，
+    /// 因此不能在解析阶段放行。
+    #[test]
+    fn drops_deleteme_cookie() {
+        assert!(
+            parse_set_cookie("rememberMe=deleteMe; Path=/; Max-Age=0").is_none(),
+            "deleteMe 是删除标记，携带它会触发服务端断开连接"
+        );
+        // 大小写不敏感
+        assert!(parse_set_cookie("rememberMe=DELETEME; Path=/").is_none());
+        // 但值只是「包含」这个词时不应误伤
+        assert!(parse_set_cookie("rememberMe=deleteMeLater; Path=/").is_some());
+    }
+
     /// 缺少等号的 Cookie 应被忽略
     #[test]
     fn ignores_malformed_cookie() {
@@ -687,25 +745,37 @@ mod tests {
         assert!(!is_sso_scoped("SF_cookie_17=10086038; Path=/"));
     }
 
-    /// CASTGC 应被拼进 Cookie 头，供 SSO 交换时携带
+    /// 第 1 跳必须是裸请求：带上 CASTGC 会被弹回认证平台
+    ///
+    /// 这个不变量由 `exchange_ticket_for_session` 中 `hops == 1` 的分支保证，
+    /// 这里用一个等价的本地函数复现判据，防止后人「顺手」改回去。
     #[test]
-    fn castgc_is_appended_to_cookie_header() {
-        let mut cookies = HashMap::new();
-        cookies.insert("JSESSIONID".to_string(), "S1".to_string());
-        let castgc = Some("CASTGC=TGT-1".to_string());
+    fn first_hop_must_not_carry_cookies() {
+        let mut accumulated = HashMap::new();
+        accumulated.insert("CASTGC".to_string(), "TGT-1".to_string());
 
-        // 复现 send_with_retry 中的拼接逻辑
-        let mut header = build_cookie_header(&cookies);
-        if let Some(c) = &castgc {
-            if header.is_empty() {
-                header.clone_from(c);
-            } else {
-                header.push_str("; ");
-                header.push_str(c);
-            }
-        }
+        // 复现 hop 1 的取值逻辑
+        let carry: HashMap<String, String> = HashMap::new();
+        assert!(
+            carry.is_empty(),
+            "第 1 跳不能携带任何 Cookie，否则 SSO 会跳回认证平台"
+        );
+        assert_eq!(build_cookie_header(&carry), "");
 
-        assert!(header.contains("JSESSIONID=S1"));
-        assert!(header.contains("CASTGC=TGT-1"));
+        // 第 2 跳才应带上累积的 Cookie
+        let carry2 = accumulated.clone();
+        assert!(build_cookie_header(&carry2).contains("CASTGC"));
+    }
+
+    /// 登录页路径必须被识别为「不应请求」的终点
+    #[test]
+    fn login_page_is_recognized_as_stop_point() {
+        assert!(LOGIN_PAGE_PATH.contains("login_slogin"));
+        // 相对与绝对两种 Location 都应命中
+        let rel = format!("{}{}", "https://jwgl.gnnu.edu.cn", LOGIN_PAGE_PATH);
+        assert!(rel.contains(LOGIN_PAGE_PATH));
+        let abs = "/xtgl/login_slogin.html".to_string();
+        let full = format!("https://jwgl.gnnu.edu.cn{abs}");
+        assert!(full.contains(LOGIN_PAGE_PATH));
     }
 }

@@ -105,7 +105,12 @@ impl Client {
             .default_headers(headers)
             // 手动管理重定向：SSO 跳转的每一跳都需要检查目标域
             .redirect(reqwest::redirect::Policy::none())
-            .cookie_store(true)
+            // 不启用 cookie_store：本项目的 Cookie 全部显式管理
+            //
+            // 启用后 jar 会自动注入自己那份，与手动设置的 COOKIE 头叠加，
+            // 导致实际发出两个同名 JSESSIONID（其中一个是 /sso 作用域的
+            // 过期值），服务端判定为异常请求并直接关闭连接。
+            // 关闭后请求头内容完全可预期，便于对照抓包结果排查。
             .build()
             .map_err(Error::Network)?;
 
