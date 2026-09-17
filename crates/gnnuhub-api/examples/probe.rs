@@ -24,9 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("1. 检查统一认证平台可达性");
     match client
-        .http()
-        .get("https://cas.gnnu.edu.cn/")
-        .send()
+        .throttled(|http| http.get("https://cas.gnnu.edu.cn/"))
         .await
     {
         Ok(resp) => println!("   cas.gnnu.edu.cn -> HTTP {}", resp.status()),
@@ -35,9 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("2. 检查教务系统可达性");
     match client
-        .http()
-        .get("https://jwgl.gnnu.edu.cn/")
-        .send()
+        .throttled(|http| http.get("https://jwgl.gnnu.edu.cn/"))
         .await
     {
         Ok(resp) => println!("   jwgl.gnnu.edu.cn -> HTTP {}", resp.status()),
@@ -47,11 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("3. 申请验证码");
     let captcha = gnnuhub_api::captcha::Captcha::random_request_id();
     let url = gnnuhub_api::captcha::Captcha::request_url(&captcha);
+    let headers = client.cas_headers();
     let resp = client
-        .http()
-        .get(&url)
-        .headers(client.cas_headers())
-        .send()
+        .throttled(|http| http.get(&url).headers(headers.clone()))
         .await?;
 
     println!("   {} -> HTTP {}", url, resp.status());

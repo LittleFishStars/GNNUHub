@@ -13,6 +13,12 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
+/// 默认的相邻请求最小间隔
+///
+/// 取值偏保守：教务系统的 WAF 对突发请求较敏感，而正常使用场景
+/// （登录 + 拉取课表）总共也就十几次请求，多等待一两秒完全可接受。
+const DEFAULT_REQUEST_INTERVAL: Duration = Duration::from_millis(600);
+
 /// 客户端配置
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -25,6 +31,12 @@ pub struct ClientConfig {
     /// Python 版在验证码错误时无限递归、在 SSO 跳转失败时 `while True`，
     /// 存在卡死风险。这里强制要求设置上限。
     pub max_login_retries: u32,
+    /// 相邻两次请求之间的最小间隔
+    ///
+    /// 教务系统前置了 SafeDog WAF，短时间高频请求会触发按 IP 的封禁
+    /// （表现为域名整体在数十毫秒内拒绝连接）。默认加一个温和的间隔
+    /// 以免杀伤自己；设为 [`Duration::ZERO`] 可关闭。
+    pub request_interval: Duration,
 }
 
 impl Default for ClientConfig {
@@ -33,6 +45,7 @@ impl Default for ClientConfig {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             user_agent: DEFAULT_USER_AGENT.to_string(),
             max_login_retries: 5,
+            request_interval: DEFAULT_REQUEST_INTERVAL,
         }
     }
 }
@@ -49,6 +62,12 @@ impl ClientConfig {
         self.max_login_retries = retries.max(1);
         self
     }
+
+    /// 设置相邻请求的最小间隔
+    pub fn with_request_interval(mut self, interval: Duration) -> Self {
+        self.request_interval = interval;
+        self
+    }
 }
 
 /// API 客户端，持有复用的 HTTP 连接池与 Cookie 容器
@@ -56,6 +75,11 @@ impl ClientConfig {
 pub struct Client {
     http: reqwest::Client,
     config: ClientConfig,
+    /// 上次发起请求的时刻，用于实现请求节流
+    ///
+    /// 用 `Arc<Mutex<_>>` 而非 `AtomicU64`，因为需要「读取→等待→写入」
+    /// 这段临界区整体串行，避免并发请求各自算出一个间隔而叠加超发。
+    last_request: std::sync::Arc<tokio::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 impl Client {
@@ -85,7 +109,11 @@ impl Client {
             .build()
             .map_err(Error::Network)?;
 
-        Ok(Self { http, config })
+        Ok(Self {
+            http,
+            config,
+            last_request: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
+        })
     }
 
     /// 使用默认配置创建客户端
@@ -94,6 +122,9 @@ impl Client {
     }
 
     /// 访问底层 HTTP 客户端
+    ///
+    /// 直接使用它会**绕过请求节流**。需要节流时请走
+    /// [`Client::throttled`]。
     pub fn http(&self) -> &reqwest::Client {
         &self.http
     }
@@ -101,6 +132,37 @@ impl Client {
     /// 访问配置
     pub fn config(&self) -> &ClientConfig {
         &self.config
+    }
+
+    /// 发起一次受节流约束的请求
+    ///
+    /// 在真正发送前，若距离上一次请求不足
+    /// [`ClientConfig::request_interval`]，会先等待补足。
+    ///
+    /// 教务系统的 WAF 会因突发请求封禁来源 IP，因此**所有**对校内
+    /// 接口的访问都应经由本方法，而不是直接使用 [`Client::http`]。
+    pub async fn throttled<F>(&self, build: F) -> Result<reqwest::Response>
+    where
+        F: FnOnce(&reqwest::Client) -> reqwest::RequestBuilder,
+    {
+        let mut last = self.last_request.lock().await;
+        let interval = self.config.request_interval;
+
+        if !interval.is_zero()
+            && let Some(prev) = *last
+        {
+            let elapsed = prev.elapsed();
+            if elapsed < interval {
+                let wait = interval - elapsed;
+                tracing::trace!("请求节流：等待 {} ms", wait.as_millis());
+                tokio::time::sleep(wait).await;
+            }
+        }
+
+        let response = build(&self.http).send().await.map_err(Error::Network)?;
+        // 只有请求真正发出后才更新时刻，避免失败重试被误判为「已节流」
+        *last = Some(std::time::Instant::now());
+        Ok(response)
     }
 
     /// 构造统一认证平台接口所需的请求头
@@ -252,6 +314,26 @@ mod tests {
     fn overrides_timeout() {
         let cfg = ClientConfig::default().with_timeout(Duration::from_secs(5));
         assert_eq!(cfg.timeout.as_secs(), 5);
+    }
+
+    /// 默认配置应带有非零的请求间隔，避免触发 WAF 封禁
+    #[test]
+    fn default_interval_is_nonzero() {
+        let cfg = ClientConfig::default();
+        assert!(
+            !cfg.request_interval.is_zero(),
+            "默认必须节流，否则容易触发教务系统的 WAF 封禁"
+        );
+    }
+
+    /// 请求间隔可被覆盖，也可显式关闭
+    #[test]
+    fn overrides_request_interval() {
+        let cfg = ClientConfig::default().with_request_interval(Duration::from_millis(50));
+        assert_eq!(cfg.request_interval.as_millis(), 50);
+
+        let off = ClientConfig::default().with_request_interval(Duration::ZERO);
+        assert!(off.request_interval.is_zero());
     }
 
     /// CAS 请求头应包含必需字段

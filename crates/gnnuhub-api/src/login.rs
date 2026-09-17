@@ -124,12 +124,9 @@ pub async fn try_login(
     form.insert("loginType", "");
     form.insert("otpcode", "");
 
+    let headers = client.cas_headers();
     let response = client
-        .http()
-        .post(&url)
-        .headers(client.cas_headers())
-        .form(&form)
-        .send()
+        .throttled(|http| http.post(&url).headers(headers.clone()).form(&form))
         .await?;
 
     let status = response.status();
@@ -214,47 +211,51 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
 
 /// 用 ticket 换取教务系统的会话 Cookie
 ///
-/// 教务系统的 SSO 交换链路**较长且中间会经过疑似登录页的中转**，
-/// 以下是实测得到的完整链路：
+/// 对应 Python 版 `login.get_cookies` + `Student.__init__`。
+/// 实测链路（⚠️ 与直觉不同，请勿「顺手」多加跳）：
 ///
 /// ```text
-/// GET /sso/lyiotlogin?ticket=ST-xxx
-///   → 302 /sso/lyiotlogin            （种下 /sso 下的 JSESSIONID）
-/// GET /sso/lyiotlogin
-///   → 302 /ticketlogin?uid=...&verify=...
-/// GET /ticketlogin?...
-///   → 302 /xtgl/login_slogin.html    （⚠️ 这是中转，不是失败）
-/// GET /xtgl/login_slogin.html
-///   → 302 /xtgl/index_initMenu.html  （种下 / 下的 JSESSIONID，会话成立）
+/// ① GET /sso/lyiotlogin?ticket=ST-xxx
+///      → 302 /sso/lyiotlogin               种下 /sso 作用域的 JSESSIONID
+/// ② GET /sso/lyiotlogin           （带上 ① 的 Cookie + CASTGC）
+///      → 302 /ticketlogin?uid=...&verify=...
+/// ③ GET /ticketlogin?...
+///      → 302 /xtgl/index_initMenu.html      种下 / 作用域的 JSESSIONID
 /// ```
 ///
-/// **重要**：`login_slogin.html` 虽然路径名像登录页，但在持有有效
-/// ticket 的流程中它只是中转站，必须继续跟随。判断会话是否成立的
-/// 依据是最终是否落在 `index_initMenu` 或是遇到了非 3xx 响应。
+/// # 为什么必须停在 ③
 ///
-/// 如果链路中跳回认证平台（`cas.gnnu.edu.cn`），说明 ticket 已被
-/// 使用或失效。
+/// ③ 的 `Set-Cookie` 才是真正可用的会话。此时 `/sso` 与 `/` 下**各有一个
+/// 同名 `JSESSIONID`**，必须**丢弃 `/sso` 那份**（见 [`is_sso_scoped`]），
+/// 否则后续带出去的是 `/sso` 的旧值，会话不成立。
+///
+/// 更强求一步去 GET `/xtgl/login_slogin.html` 会被服务端直接关闭连接
+/// （`peer closed connection without sending TLS close_notify`）——
+/// 该校对「已持有会话却重放登录页」的行为有防护，这是实测结论，
+/// 不是网络抖动。因此本函数**在收到非 3xx 后立即停止**。
 ///
 /// # 错误
 ///
-/// - ticket 未被接受时返回 [`Error::SsoRedirect`]
-/// - 跳转超出最大次数时返回 [`Error::LoginRetriesExhausted`]
+/// - ticket 未被接受（跳回认证平台）时返回 [`Error::SsoRedirect`]
+/// - 跳转超出上限时返回 [`Error::LoginRetriesExhausted`]
+/// - 最终未取到根作用域的 `JSESSIONID` 时返回 [`Error::Unauthenticated`]
 pub async fn exchange_ticket_for_session(
     client: &Client,
     ticket: &str,
     castgc: &str,
     max_hops: u32,
 ) -> Result<HashMap<String, String>> {
+    // CASTGC 属于认证平台，显式声明它的归属，避免被当成教务系统的 Cookie
     let mut cookies: HashMap<String, String> = HashMap::new();
-    if !castgc.is_empty() {
-        cookies.insert("CASTGC".to_string(), castgc.to_string());
-    }
+
+    // /sso 作用域下的 JSESSIONID——只是链路中的中转产物，最后必须丢掉
+    let mut sso_jsessionid: Option<String> = None;
 
     // 第一跳必须携带 ticket 才能完成兑换
     let mut url = format!("{JWGL_BASE_URL}{SSO_LOGIN_PATH}?ticket={ticket}");
     let mut hops = 0;
-    // 跳转次数上限取配置值与 10 的较大者，SSO 链路至少需要 4 跳
-    let hop_limit = max_hops.max(10);
+    // SSO 链路实测 3 跳即可完成
+    let hop_limit = max_hops.max(5);
 
     loop {
         hops += 1;
@@ -264,16 +265,20 @@ pub async fn exchange_ticket_for_session(
             });
         }
 
-        let response = match send_with_retry(client, &url, &cookies, hops).await {
+        let response = match send_with_retry(client, &url, &cookies, &castgc_send(castgc), hops).await
+        {
             Ok(r) => r,
             Err(e) => return Err(e),
         };
 
         let status = response.status();
-        collect_set_cookies(&response, &mut cookies);
-        tracing::trace!("SSO 第 {hops} 跳 {url} -> {status}");
+        collect_set_cookies(&response, &mut cookies, &mut sso_jsessionid);
+        tracing::debug!("SSO 第 {hops} 跳 {url} -> {status}");
 
-        // 非重定向说明已落在目标页面，会话建立完成
+        // 非重定向即到达目标页：会话已由本跳的 Set-Cookie 建立
+        //
+        // 这里必须停止，不能为了「确认会话有效」再请求一次登录页：
+        // 服务端会把这种重放判定为异常并直接断开 TLS 连接。
         if !status.is_redirection() {
             break;
         }
@@ -309,57 +314,84 @@ pub async fn exchange_ticket_for_session(
             )));
         }
 
-        // 到达首页说明会话已建立，无需继续跟随
-        if parsed.path().contains("index_initMenu") {
-            tracing::debug!("SSO 已到达教务系统首页");
-            break;
-        }
-
         url = next;
     }
 
+    // 丢掉 /sso 作用域的中转 Cookie
+    if let Some(stale) = sso_jsessionid
+        && cookies.get("JSESSIONID") == Some(&stale)
+    {
+        tracing::debug!("丢弃 /sso 作用域的中转 JSESSIONID");
+        cookies.remove("JSESSIONID");
+    }
+
+    // 根作用域下必须存在 JSESSIONID，否则后续请求会被弹回登录页
     if !cookies.contains_key("JSESSIONID") {
         return Err(Error::Unauthenticated);
     }
 
-    tracing::info!("SSO 交换完成，共 {hops} 跳，获得 {} 个 Cookie", cookies.len());
+    tracing::info!(
+        "SSO 交换完成，共 {hops} 跳，获得 {} 个 Cookie",
+        cookies.len()
+    );
     Ok(cookies)
+}
+
+/// 打包 CASTGC 供请求头使用
+fn castgc_send(castgc: &str) -> Option<String> {
+    if castgc.is_empty() {
+        None
+    } else {
+        Some(format!("CASTGC={castgc}"))
+    }
 }
 
 /// 发起一次 SSO 跳转请求，对**传输层瞬时故障**做有限重试
 ///
-/// 学校网关在校外访问时偶发直接关闭 TLS 连接
-/// （`peer closed connection without sending TLS close_notify`），
-/// 这类错误与请求内容无关，重试即可恢复；而 HTTP 状态码层面的
-/// 失败（如 404）不会重试，交由调用方判断。
-///
 /// 注意：SSO 每一跳都可能种下新 Cookie，重试时沿用同一份 Cookie 集合，
 /// 不会破坏会话状态。
+///
+/// # 关于重试
+///
+/// 仅对传输层错误重试。**HTTP 状态码层面的失败不会重试**：
+/// 服务端对「重放登录页」这类异常请求会主动关闭 TLS 连接，
+/// 盲目重试只会加深风控，交由调用方按状态码判断更安全。
 async fn send_with_retry(
     client: &Client,
     url: &str,
     cookies: &HashMap<String, String>,
+    castgc_header: &Option<String>,
     hop: u32,
 ) -> Result<reqwest::Response> {
     /// 单跳最多尝试次数
     const MAX_ATTEMPTS: u32 = 3;
     /// 重试前的等待时间
-    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+    ///
+    /// 取值需明显大于请求间隔：服务端的风控窗口是秒级的，
+    /// 立刻重试会撞在同一个窗口上，反而加深封禁。
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(1200);
+
+    let mut cookie_header = build_cookie_header(cookies);
+    if let Some(castgc) = castgc_header {
+        if cookie_header.is_empty() {
+            cookie_header.clone_from(castgc);
+        } else {
+            cookie_header.push_str("; ");
+            cookie_header.push_str(castgc);
+        }
+    }
 
     let mut last_err = None;
     for attempt in 1..=MAX_ATTEMPTS {
         let result = client
-            .http()
-            .get(url)
-            .header(reqwest::header::COOKIE, build_cookie_header(cookies))
-            .send()
+            .throttled(|http| http.get(url).header(reqwest::header::COOKIE, &cookie_header))
             .await;
 
         match result {
             Ok(response) => return Ok(response),
             Err(e) => {
                 tracing::warn!("SSO 第 {hop} 跳第 {attempt} 次请求失败: {e}");
-                // 打出完整错误链，便于定位是 DNS / TLS / 代理哪一层的问题
+                // 打出完整错误链，便于定位是 DNS / TLS / 代理哪一层出问题
                 let mut source: Option<&(dyn std::error::Error + 'static)> =
                     std::error::Error::source(&e);
                 while let Some(s) = source {
@@ -374,23 +406,48 @@ async fn send_with_retry(
         }
     }
 
-    Err(Error::Network(
-        last_err.expect("循环至少执行一次，必然记录过错误"),
-    ))
+    Err(last_err.expect("循环至少执行一次，必然记录过错误"))
 }
 
-/// 收集响应中的所有 Set-Cookie
+/// 收集响应中的所有 Set-Cookie，并按作用域归位
 ///
-/// 注意同名 Cookie 可能带不同 Path 出现多次（`/sso` 与 `/` 各一份），
-/// 这里以**后出现的为准**，因为链路上后种的通常是根路径下的有效会话。
-fn collect_set_cookies(response: &reqwest::Response, out: &mut HashMap<String, String>) {
+/// 同名 Cookie 可能带不同 `Path` 在链路上各出现一次——典型的是
+/// `JSESSIONID` 在 `/sso` 与 `/` 下各一份。这里：
+///
+/// - **根作用域**（无 `Path` 或 `Path=/`）的值写入 `out`，作为有效会话
+/// - **`/sso` 作用域**的值记入 `sso_scoped`，供调用方最后丢弃
+///
+/// 之所以不简单地「后出现的为准」：`/sso` 下的那份在链路上可能最后出现，
+/// 若直接覆盖会让后续请求带上错误的会话标识。
+fn collect_set_cookies(
+    response: &reqwest::Response,
+    out: &mut HashMap<String, String>,
+    sso_scoped: &mut Option<String>,
+) {
     for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
-        if let Ok(text) = value.to_str()
-            && let Some((name, val)) = parse_set_cookie(text)
-        {
+        let Ok(text) = value.to_str() else { continue };
+        let Some((name, val)) = parse_set_cookie(text) else {
+            continue;
+        };
+        if is_sso_scoped(text) {
+            tracing::trace!("记录 /sso 作用域 Cookie: {name}");
+            *sso_scoped = Some(val);
+        } else {
             out.insert(name, val);
         }
     }
+}
+
+/// 判断 Set-Cookie 是否只对 `/sso` 路径生效
+///
+/// 只解析 `Path` 属性；缺少该属性时按浏览器默认行为视为当前目录，
+/// 对本次登录流程而言即是根作用域。
+fn is_sso_scoped(set_cookie: &str) -> bool {
+    set_cookie
+        .split(';')
+        .skip(1)
+        .filter_map(|attr| attr.split_once('='))
+        .any(|(k, v)| k.trim().eq_ignore_ascii_case("path") && v.trim().starts_with("/sso"))
 }
 
 /// 把 Cookie 映射拼成请求头
@@ -437,11 +494,9 @@ pub async fn fetch_captcha(client: &Client) -> Result<Captcha> {
     let request_id = Captcha::random_request_id();
     let url = Captcha::request_url(&request_id);
 
+    let headers = client.cas_headers();
     let response = client
-        .http()
-        .get(&url)
-        .headers(client.cas_headers())
-        .send()
+        .throttled(|http| http.get(&url).headers(headers.clone()))
         .await?;
 
     if !response.status().is_success() {
@@ -614,5 +669,43 @@ mod tests {
         let s = "中文测试";
         let out = truncate(s, 5);
         assert!(s.starts_with(out));
+    }
+
+    /// `/sso` 作用域的 Cookie 应被识别出来
+    #[test]
+    fn detects_sso_scoped_cookie() {
+        assert!(is_sso_scoped("JSESSIONID=ABC; Path=/sso; HttpOnly"));
+        assert!(is_sso_scoped("JSESSIONID=ABC; path=/sso/lyiotlogin"));
+        assert!(is_sso_scoped("JSESSIONID=ABC; Path=/sso5"));
+    }
+
+    /// 根作用域的 Cookie 不应被误判为 /sso
+    #[test]
+    fn root_cookie_is_not_sso_scoped() {
+        assert!(!is_sso_scoped("JSESSIONID=ABC; Path=/; HttpOnly"));
+        assert!(!is_sso_scoped("JSESSIONID=ABC"));
+        assert!(!is_sso_scoped("SF_cookie_17=10086038; Path=/"));
+    }
+
+    /// CASTGC 应被拼进 Cookie 头，供 SSO 交换时携带
+    #[test]
+    fn castgc_is_appended_to_cookie_header() {
+        let mut cookies = HashMap::new();
+        cookies.insert("JSESSIONID".to_string(), "S1".to_string());
+        let castgc = Some("CASTGC=TGT-1".to_string());
+
+        // 复现 send_with_retry 中的拼接逻辑
+        let mut header = build_cookie_header(&cookies);
+        if let Some(c) = &castgc {
+            if header.is_empty() {
+                header.clone_from(c);
+            } else {
+                header.push_str("; ");
+                header.push_str(c);
+            }
+        }
+
+        assert!(header.contains("JSESSIONID=S1"));
+        assert!(header.contains("CASTGC=TGT-1"));
     }
 }

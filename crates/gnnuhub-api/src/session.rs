@@ -46,8 +46,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// 由登录流程内部调用，创建会话
-    pub(crate) fn new(
+    /// 由已有的 Cookie 直接构造会话
+    ///
+    /// 一般场景请用 [`crate::Client::login`]；当需要复用外部持久化的
+    /// Cookie（例如把登录状态缓存到磁盘后恢复）时才用本方法。
+    ///
+    /// 传入的 Cookie 必须包含有效的 `JSESSIONID`，否则后续请求会被
+    /// 重定向到登录页，表现为 [`crate::Error::Unauthenticated`]。
+    pub fn new(
         client: Client,
         cookies: HashMap<String, String>,
         student_id: String,
@@ -73,13 +79,14 @@ impl Session {
     /// 发起一个带会话 Cookie 的 GET 请求
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
+        let cookie = self.cookie_header();
         let response = self
             .client
-            .http()
-            .get(&url)
-            .query(query)
-            .header(reqwest::header::COOKIE, self.cookie_header())
-            .send()
+            .throttled(|http| {
+                http.get(&url)
+                    .query(query)
+                    .header(reqwest::header::COOKIE, &cookie)
+            })
             .await?;
 
         let status = response.status();
@@ -100,14 +107,15 @@ impl Session {
         form: &[(&str, &str)],
     ) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
+        let cookie = self.cookie_header();
         let response = self
             .client
-            .http()
-            .post(&url)
-            .query(query)
-            .header(reqwest::header::COOKIE, self.cookie_header())
-            .form(form)
-            .send()
+            .throttled(|http| {
+                http.post(&url)
+                    .query(query)
+                    .header(reqwest::header::COOKIE, &cookie)
+                    .form(form)
+            })
             .await?;
 
         let status = response.status();

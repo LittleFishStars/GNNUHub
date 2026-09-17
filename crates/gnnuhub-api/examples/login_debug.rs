@@ -103,6 +103,26 @@ async fn submit_login(uid: &str, code: &str) -> Result<(), Box<dyn std::error::E
                     for (k, v) in &cookies {
                         println!("  {k} = {}...", &v[..v.len().min(20)]);
                     }
+
+                    // 会话是否真的可用，要以能否取到数据为准
+                    println!("\n验证会话（拉取学籍信息）...");
+                    let session = gnnuhub_api::Session::new(
+                        client.clone(),
+                        cookies,
+                        student_id.to_string(),
+                    );
+                    match session.fetch_basic_info().await {
+                        Ok(info) => {
+                            println!("会话有效");
+                            println!("  学号: {}", info.student_id);
+                            println!("  姓名: {}", info.name.as_deref().unwrap_or("(无)"));
+                            println!("  身份: {}", info.identity.as_deref().unwrap_or("(无)"));
+                            println!("  学院: {}", info.college.as_deref().unwrap_or("(无)"));
+                            println!("  专业: {}", info.major.as_deref().unwrap_or("(无)"));
+                            println!("  班级: {}", info.class_name.as_deref().unwrap_or("(无)"));
+                        }
+                        Err(e) => println!("会话无效: {e}"),
+                    }
                 }
                 Err(e) => println!("会话交换失败: {e}"),
             }
