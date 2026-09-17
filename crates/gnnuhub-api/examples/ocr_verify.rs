@@ -26,6 +26,16 @@
 //! 拿旧 uid 提交只会得到「验证码失效」，无法区分识别对错。因此本工具
 //! **每轮重新申请一张验证码**，识别后立刻提交，全程在一个 ttl 内完成。
 //!
+//! # 识别引擎
+//!
+//! 默认用 [`BitmapOcr`] 位图查表（内嵌字库，60 张样本构建，65 字形 /
+//! 59 字符）。加 `--features tesseract` 后用 `recommended_with_tesseract`
+//! 走「位图 -> tesseract -> 人工」的链路，两者结果会同时打印以便对比。
+//!
+//! 每轮把四个字形的**匹配质量**一并打印（`=` 精确命中、`~N` 模糊命中且
+//! 汉明距离为 N、`!` 未命中），这样失败轮次能立刻看出是「字库缺条目」
+//! 还是「识别链路别的问题」。
+//!
 //! # 请求量控制
 //!
 //! 每张验证码固定消耗 **2 个请求**（取图 + 提交）。默认跑 20 轮 = 40 请求。
@@ -36,7 +46,7 @@
 //!
 //! ```bash
 //! GNNU_STUDENT_ID=xxx GNNU_PASSWORD='故意写错的密码' \
-//!   cargo run -p gnnuhub-api --example ocr_verify --features tesseract -- 20
+//!   cargo run -p gnnuhub-api --example ocr_verify -- 20
 //! ```
 //!
 //! 第一个位置参数是轮数，第二个可选是输出 JSON 路径（默认
@@ -51,7 +61,35 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gnnuhub_api::{Client, LoginOutcome};
-use gnnuhub_ocr::{OcrEngine, TesseractOcr, decode_image};
+use gnnuhub_ocr::{BitmapLibrary, bitmap::extract_glyphs_for_bench, decode_image};
+
+/// 单个字形的匹配质量
+#[derive(Debug, Clone)]
+struct GlyphHit {
+    /// 字符
+    ch: char,
+    /// 匹配方式：`exact` / `fuzzy` / `miss`
+    kind: &'static str,
+    /// 汉明距离；`exact` 为 0，`miss` 为 `None`
+    distance: Option<usize>,
+    /// 字形尺寸，便于事后分析
+    dim: String,
+}
+
+/// 一轮的结果
+#[derive(Debug)]
+struct RoundResult {
+    /// 本轮序号
+    index: usize,
+    /// 识别出的验证码
+    code: Option<String>,
+    /// 判定结论
+    verdict: &'static str,
+    /// 详情
+    detail: String,
+    /// 逐字形匹配质量
+    glyphs: Vec<GlyphHit>,
+}
 
 /// 轮之间的等待时间
 ///
@@ -68,17 +106,53 @@ const SUBMIT_DELAY: Duration = Duration::from_millis(600);
 /// 单次运行允许的最大轮数
 const MAX_ROUNDS: usize = 60;
 
-/// 一轮的结果
-#[derive(Debug)]
-struct RoundResult {
-    /// 本轮序号
-    index: usize,
-    /// 识别出的验证码
-    code: Option<String>,
-    /// 判定结论
-    verdict: &'static str,
-    /// 详情
-    detail: String,
+/// 用位图字库识别一张图，并给出逐字形的匹配质量
+///
+/// 与 [`gnnuhub_ocr::BitmapOcr::recognize_image`] 的区别是这里不把
+/// 「未命中」当成整体失败，而是如实返回已经命中的部分与未命中的槽位，
+/// 便于诊断字库缺口。
+fn recognize_with_quality(
+    lib: &BitmapLibrary,
+    image_base64: &str,
+) -> Result<Vec<GlyphHit>, String> {
+    let glyphs = extract_glyphs_for_bench(image_base64).map_err(|e| e.to_string())?;
+    if glyphs.len() != 4 {
+        return Err(format!("期望 4 个字形，实际 {}", glyphs.len()));
+    }
+    let mut hits = Vec::with_capacity(4);
+    for g in &glyphs {
+        let dim = format!("{}x{}", g.w, g.h);
+        if let Some(ch) = lib.lookup_exact(g.w, g.h, &g.bits) {
+            hits.push(GlyphHit {
+                ch,
+                kind: "exact",
+                distance: Some(0),
+                dim,
+            });
+            continue;
+        }
+        // 逐级放宽：先试距离 1，再试 2，命中即止。
+        // 分成两档是为了区分「差 1 像素」和「差 2 像素」，
+        // 后者更可能是真正的字库缺口而非同一字形的抗锯齿抖动。
+        match lib
+            .lookup_fuzzy(g.w, g.h, &g.bits, 1)
+            .or_else(|| lib.lookup_fuzzy(g.w, g.h, &g.bits, 2))
+        {
+            Some((ch, d)) => hits.push(GlyphHit {
+                ch,
+                kind: "fuzzy",
+                distance: Some(d),
+                dim,
+            }),
+            None => hits.push(GlyphHit {
+                ch: '?',
+                kind: "miss",
+                distance: None,
+                dim,
+            }),
+        }
+    }
+    Ok(hits)
 }
 
 #[tokio::main]
@@ -106,10 +180,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    若填了正确密码，命中正确验证码时会真的登录成功。");
     println!();
 
-    let engine = TesseractOcr::new();
-    if !engine.is_available() {
-        eprintln!("未检测到 tesseract，无法运行");
-        std::process::exit(1);
+    // 直接加载内嵌字库，拿到引用以便逐字形查表
+    let lib = gnnuhub_ocr::embedded_library()?;
+    println!("字库：{} 个字形", lib.len());
+
+    // 可选：tesseract 对照。默认构建下这段会被 cfg 掉。
+    //
+    // 这里只做可用性探测并打印，不参与判定——位图查表命中率远高于
+    // tesseract，把两者混在一起只会让「谁错了」变得难以归因。
+    #[cfg(feature = "tesseract")]
+    {
+        let tess = gnnuhub_ocr::TesseractOcr::new();
+        if tess.is_available() {
+            println!("对照引擎：tesseract 可用（本工具默认不采用其结果）");
+        } else {
+            println!("对照引擎：tesseract 未安装");
+        }
     }
 
     let client = Client::with_defaults()?;
@@ -122,6 +208,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut correct = 0usize;
     let mut wrong = 0usize;
     let mut unrecognized = 0usize;
+    // 字形级统计
+    let mut g_exact = 0usize;
+    let mut g_fuzzy = 0usize;
+    let mut g_miss = 0usize;
+    let mut miss_dims: Vec<String> = Vec::new();
 
     for index in 1..=rounds {
         println!("---- 第 {index}/{rounds} 轮 ----");
@@ -135,9 +226,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // 2) 本地识别
-        let code = match engine.recognize(&captcha.image, None) {
-            Ok(c) => c,
+        // 2) 本地识别（逐字形给出匹配质量）
+        let hits = match recognize_with_quality(&lib, &captcha.image) {
+            Ok(h) => h,
             Err(e) => {
                 println!("  识别失败（跳过，不提交）: {e}");
                 unrecognized += 1;
@@ -145,18 +236,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     index,
                     code: None,
                     verdict: "unrecognized",
-                    detail: e.to_string(),
+                    detail: e,
+                    glyphs: Vec::new(),
                 });
                 tokio::time::sleep(ROUND_INTERVAL).await;
                 continue;
             }
         };
-        println!("  识别结果: {code}");
+
+        for h in &hits {
+            match h.kind {
+                "exact" => g_exact += 1,
+                "fuzzy" => g_fuzzy += 1,
+                _ => {
+                    g_miss += 1;
+                    miss_dims.push(format!("{} {}", h.dim, index));
+                }
+            }
+        }
+
+        let quality: String = hits
+            .iter()
+            .map(|h| match (h.kind, h.distance) {
+                ("exact", _) => '='.to_string(),
+                ("fuzzy", Some(d)) => format!("~{d}"),
+                _ => "!".to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let code: String = hits.iter().map(|h| h.ch).collect();
+        println!("  识别结果: {code}   [匹配 {quality}]");
 
         // 顺便把这张图存下来，便于事后复核识别错误的样本
         if let Ok(img) = decode_image(&captcha.image) {
             let p = format!("captcha_samples/verify_{index:04}.png");
             let _ = img.save(&p);
+        }
+
+        // 未全部命中时不提交：字库没覆盖到的位图，提交也只是白耗一个请求
+        // 并给账号加一次失败记录。
+        if hits.iter().any(|h| h.kind == "miss") {
+            println!("  有字形未命中字库，不提交（省一次请求）");
+            unrecognized += 1;
+            results.push(RoundResult {
+                index,
+                code: Some(code),
+                verdict: "unrecognized",
+                detail: "存在未命中字库的字形".to_string(),
+                glyphs: hits,
+            });
+            tokio::time::sleep(ROUND_INTERVAL).await;
+            continue;
         }
 
         // 3) 稍等一下再提交，避免非人类节奏
@@ -187,6 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     code: Some(code.clone()),
                     verdict: "aborted",
                     detail: e.to_string(),
+                    glyphs: hits,
                 });
                 break;
             }
@@ -219,6 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             code: Some(code),
             verdict,
             detail,
+            glyphs: hits,
         });
 
         tokio::time::sleep(ROUND_INTERVAL).await;
@@ -246,6 +379,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    let g_total = g_exact + g_fuzzy + g_miss;
+    if g_total > 0 {
+        println!();
+        println!("字形级（提交过的轮次）:");
+        println!("  精确 {g_exact} / 模糊 {g_fuzzy} / 未命中 {g_miss}（共 {g_total}）");
+        println!(
+            "  命中率 {:.1}%",
+            (g_exact + g_fuzzy) as f64 / g_total as f64 * 100.0
+        );
+    }
+    if !miss_dims.is_empty() {
+        println!();
+        println!("未命中的字形尺寸（用于补字库）:");
+        for d in &miss_dims {
+            println!("  {d}");
+        }
+    }
+
     // 逐轮明细
     println!();
     for r in &results {
@@ -259,11 +410,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "wrong": wrong,
         "unrecognized": unrecognized,
         "accuracy": if judged > 0 { Some(correct as f64 / judged as f64) } else { None },
+        "glyph": {
+            "exact": g_exact,
+            "fuzzy": g_fuzzy,
+            "miss": g_miss,
+        },
         "rounds": results.iter().map(|r| serde_json::json!({
             "index": r.index,
             "code": r.code,
             "verdict": r.verdict,
             "detail": r.detail,
+            "glyphs": r.glyphs.iter().map(|g| serde_json::json!({
+                "ch": g.ch.to_string(),
+                "kind": g.kind,
+                "distance": g.distance,
+                "dim": g.dim,
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     });
     std::fs::write(&out_path, serde_json::to_string_pretty(&json)?)?;
