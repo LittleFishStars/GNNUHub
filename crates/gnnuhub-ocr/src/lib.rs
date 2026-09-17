@@ -5,7 +5,8 @@
 //! - 尺寸固定 **100 × 25** 像素，PNG 格式
 //! - 固定 **4 个字符**，字母数字混合，**大小写混用**
 //! - 每个字符**颜色随机**且互不相同，白色背景
-//! - 无旋转、无扭曲、无干扰线
+//! - **启用抗锯齿**（一个字形约 31 种颜色：1 个实心核心 + 约 30 个过渡色）
+//! - 无旋转、无扭曲、无干扰线；噪点是**独立连通域**，不与字形相连
 //!
 //! 由于字符颜色随机，识别前必须先做灰度化丢弃颜色信息。
 //!
@@ -15,7 +16,8 @@
 //! 因此可以自由替换实现：
 //!
 //! - [`ManualOcr`]：不做识别，把图片交给调用方人工输入（默认实现）
-//! - 模板匹配 OCR：需要预先采集样本训练字型库
+//! - [`FailoverOcr`]：把任意自动识别器包一层，失败时自动退回人工输入
+//! - `TesseractOcr`（feature `tesseract`）：调用外部 tesseract 识别
 //! - 云打码服务：网络调用第三方识别接口
 //!
 //! # 示例
@@ -43,6 +45,12 @@
 use base64::Engine as _;
 use gnnuhub_core::{Error, Result};
 use image::DynamicImage;
+
+#[cfg(feature = "tesseract")]
+pub mod tesseract;
+
+#[cfg(feature = "tesseract")]
+pub use tesseract::TesseractOcr;
 
 /// 验证码识别引擎
 ///
@@ -136,6 +144,83 @@ impl OcrEngine for ManualOcr {
 
     fn name(&self) -> &'static str {
         "manual"
+    }
+}
+
+/// 带自动回退的识别器
+///
+/// 把任意识别器包一层：先尝试自动识别，**只要它失败就退回人工输入**。
+///
+/// # 为什么要有这一层
+///
+/// 自动识别的失败是常态而非异常：tesseract 可能没装、两个预处理配置
+/// 可能读不出共识、图片可能被服务端换成新的干扰样式。这些情况都不该让
+/// 整个登录流程崩掉——登录本来就有重试，最坏退化成人工输入即可。
+///
+/// # 回退的错误范围
+///
+/// **所有**错误都会触发回退，包括：
+///
+/// - [`Error::CaptchaRequiresManualInput`]：识别器自己就放弃了
+/// - [`Error::InvalidCaptcha`]：识别结果不是合法验证码
+/// - [`Error::Config`] / [`Error::Image`]：tesseract 缺失或调用失败
+///
+/// 唯一不回退的情形是**回调本身也失败**（用户取消或输入非法），
+/// 此时错误如实向上抛。
+///
+/// # 示例
+///
+/// ```no_run
+/// # #[cfg(feature = "tesseract")]
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use gnnuhub_ocr::{FailoverOcr, ManualOcr, OcrEngine, TesseractOcr};
+///
+/// // 自动识别失败时交给界面层弹输入框
+/// let engine = FailoverOcr::new(Box::new(TesseractOcr::new()), ManualOcr::new());
+/// # let _ = engine;
+/// # Ok(())
+/// # }
+/// # #[cfg(not(feature = "tesseract"))]
+/// # fn main() {}
+/// ```
+pub struct FailoverOcr {
+    /// 优先使用的自动识别器
+    primary: Box<dyn OcrEngine>,
+    /// 自动识别失败时使用的人工识别器
+    fallback: ManualOcr,
+}
+
+impl FailoverOcr {
+    /// 用给定的主识别器与人工兜底构造
+    pub fn new(primary: Box<dyn OcrEngine>, fallback: ManualOcr) -> Self {
+        Self { primary, fallback }
+    }
+}
+
+impl std::fmt::Debug for FailoverOcr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FailoverOcr")
+            .field("primary", &self.primary.name())
+            .finish_non_exhaustive()
+    }
+}
+
+impl OcrEngine for FailoverOcr {
+    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
+        match self.primary.recognize(image_base64, interactive) {
+            Ok(code) => Ok(code),
+            Err(e) => {
+                tracing::debug!(
+                    "自动识别器 {} 失败（{e}），退回人工输入",
+                    self.primary.name()
+                );
+                self.fallback.recognize(image_base64, interactive)
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "failover"
     }
 }
 
@@ -277,5 +362,80 @@ mod tests {
     fn decode_image_rejects_invalid_base64() {
         let err = decode_image("!!!not-base64!!!").unwrap_err();
         assert!(matches!(err, Error::Image(_)));
+    }
+
+    /// 一个永远失败的识别器，用于测试回退行为
+    struct AlwaysFail;
+
+    impl OcrEngine for AlwaysFail {
+        fn recognize(
+            &self,
+            _image_base64: &str,
+            _interactive: Option<&InteractiveFn>,
+        ) -> Result<String> {
+            Err(Error::Image("故意的失败".to_string()))
+        }
+
+        fn name(&self) -> &'static str {
+            "always-fail"
+        }
+    }
+
+    /// 一个永远成功的识别器，用于测试回退不被触发
+    struct AlwaysOk(&'static str);
+
+    impl OcrEngine for AlwaysOk {
+        fn recognize(
+            &self,
+            _image_base64: &str,
+            _interactive: Option<&InteractiveFn>,
+        ) -> Result<String> {
+            Ok(self.0.to_string())
+        }
+
+        fn name(&self) -> &'static str {
+            "always-ok"
+        }
+    }
+
+    /// 主识别器成功时，不应打扰用户
+    #[test]
+    fn failover_uses_primary_when_it_succeeds() {
+        let engine = FailoverOcr::new(Box::new(AlwaysOk("aB3d")), ManualOcr::new());
+        let cb: &InteractiveFn = &|_img: &str| panic!("主识别器成功时不应调用回调");
+        let result = engine.recognize("AAAA", Some(cb)).unwrap();
+        assert_eq!(result, "aB3d");
+    }
+
+    /// 主识别器失败时应退回人工输入
+    #[test]
+    fn failover_falls_back_to_manual() {
+        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
+        let cb: &InteractiveFn = &|_img: &str| Ok(Some("Zz9Q".to_string()));
+        let result = engine.recognize("AAAA", Some(cb)).unwrap();
+        assert_eq!(result, "Zz9Q");
+    }
+
+    /// 主识别器失败且无回调时，应报需要人工输入
+    #[test]
+    fn failover_without_callback_errors() {
+        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
+        let err = engine.recognize("AAAA", None).unwrap_err();
+        assert!(matches!(err, Error::CaptchaRequiresManualInput));
+    }
+
+    /// 回退后的输入同样要经过格式校验
+    #[test]
+    fn failover_validates_fallback_input() {
+        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
+        let cb: &InteractiveFn = &|_img: &str| Ok(Some("ab".to_string()));
+        assert!(engine.recognize("AAAA", Some(cb)).is_err());
+    }
+
+    /// 回退引擎的名字应稳定，便于日志归因
+    #[test]
+    fn failover_name_is_stable() {
+        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
+        assert_eq!(engine.name(), "failover");
     }
 }

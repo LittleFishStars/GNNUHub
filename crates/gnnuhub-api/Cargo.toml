@@ -8,6 +8,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# 透传 OCR 的 tesseract 引擎开关，方便 workspace 顶层一次性启用：
+# `cargo test --features tesseract`
+tesseract = ["gnnuhub-ocr/tesseract"]
+
 [dependencies]
 gnnuhub-core.workspace = true
 gnnuhub-crypto.workspace = true

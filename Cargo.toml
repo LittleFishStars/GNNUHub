@@ -41,6 +41,11 @@ num-bigint = "0.4"
 num-traits = "0.2"
 
 # 图像处理（验证码）
+#
+# `imageops` 无需单独开启——该模块在 `image` 0.25 中无条件编译，
+# `resize` 的 LANCZOS 重采样一直可用。验证码放大依赖它：
+# 原图字号仅 8~18px，直接喂给 tesseract 命中率极低（实测 psm7 仅 29/60），
+# 放大到 5 倍后升到 48/60。
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
 
