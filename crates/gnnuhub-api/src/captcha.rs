@@ -19,7 +19,7 @@
 
 use serde::Deserialize;
 
-use gnnuhub_core::{Error, Result, CAS_BASE_URL};
+use gnnuhub_core::{CAS_BASE_URL, Error, Result};
 
 /// 验证码接口路径
 const KAPTCHA_PATH: &str = "/lyuapServer/kaptcha";

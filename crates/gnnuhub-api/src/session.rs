@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{AcademicTerm, ClassSchedule, PeriodTime, StudentInfo};
-use gnnuhub_core::{Error, Result, JWGL_BASE_URL};
+use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
 use crate::client::Client;
 use crate::parse;
@@ -53,11 +53,7 @@ impl Session {
     ///
     /// 传入的 Cookie 必须包含有效的 `JSESSIONID`，否则后续请求会被
     /// 重定向到登录页，表现为 [`crate::Error::Unauthenticated`]。
-    pub fn new(
-        client: Client,
-        cookies: HashMap<String, String>,
-        student_id: String,
-    ) -> Self {
+    pub fn new(client: Client, cookies: HashMap<String, String>, student_id: String) -> Self {
         Self {
             client,
             cookies: Arc::new(cookies),
@@ -76,6 +72,44 @@ impl Session {
         crate::login::build_cookie_header(&self.cookies)
     }
 
+    /// 向教务系统发起一次请求并返回响应体
+    ///
+    /// 这是本模块唯一的出口：统一负责补全域名、注入会话 Cookie、
+    /// 校验状态码，并保证请求经由 [`Client::throttled`] 节流。
+    ///
+    /// `build` 在拿到 `RequestBuilder` 后继续追加方法特有的内容
+    /// （查询串、表单体等），因此三种请求形态共用同一条路径。
+    async fn send<F>(&self, url: &str, build: F) -> Result<String>
+    where
+        F: FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    {
+        let cookie = self.cookie_header();
+        let response = self
+            .client
+            .throttled(|http| build(http.get(url)).header(reqwest::header::COOKIE, &cookie))
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::UnexpectedStatus {
+                status: status.as_u16(),
+                url: url.to_string(),
+            });
+        }
+        Ok(response.text().await?)
+    }
+
+    /// 把站内路径补全为绝对地址
+    ///
+    /// 已经是 `http(s)://` 开头时原样返回，便于直接抓取外部资源。
+    fn absolute_url(path: &str) -> String {
+        if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{JWGL_BASE_URL}{path}")
+        }
+    }
+
     /// 按原样请求一个站内路径，返回响应体文本
     ///
     /// 与 [`Session::get`] 的区别：`path` 已经包含查询串，不再额外拼接。
@@ -83,48 +117,14 @@ impl Session {
     ///
     /// 请求仍然经过客户端节流，避免触发网关风控。
     pub async fn fetch_raw(&self, path: &str) -> Result<String> {
-        let url = if path.starts_with("http") {
-            path.to_string()
-        } else {
-            format!("{JWGL_BASE_URL}{path}")
-        };
-        let cookie = self.cookie_header();
-        let response = self
-            .client
-            .throttled(|http| http.get(&url).header(reqwest::header::COOKIE, &cookie))
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::UnexpectedStatus {
-                status: status.as_u16(),
-                url,
-            });
-        }
-        Ok(response.text().await?)
+        let url = Self::absolute_url(path);
+        self.send(&url, |req| req).await
     }
 
     /// 发起一个带会话 Cookie 的 GET 请求
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
-        let cookie = self.cookie_header();
-        let response = self
-            .client
-            .throttled(|http| {
-                http.get(&url)
-                    .query(query)
-                    .header(reqwest::header::COOKIE, &cookie)
-            })
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::UnexpectedStatus {
-                status: status.as_u16(),
-                url,
-            });
-        }
-        Ok(response.text().await?)
+        self.send(&url, |req| req.query(query)).await
     }
 
     /// 发起一个带会话 Cookie 的 POST 请求（表单）
@@ -135,25 +135,7 @@ impl Session {
         form: &[(&str, &str)],
     ) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
-        let cookie = self.cookie_header();
-        let response = self
-            .client
-            .throttled(|http| {
-                http.post(&url)
-                    .query(query)
-                    .header(reqwest::header::COOKIE, &cookie)
-                    .form(form)
-            })
-            .await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(Error::UnexpectedStatus {
-                status: status.as_u16(),
-                url,
-            });
-        }
-        Ok(response.text().await?)
+        self.send(&url, |req| req.query(query).form(form)).await
     }
 
     /// 拉取首页基本资料（姓名、身份、学院、班级、头像）
@@ -169,10 +151,10 @@ impl Session {
 
         let mut parsed = parse::parse_basic_info(&html)?;
         // 首页不带学号，用登录时的学号补齐
-        parsed.student_id = self.student_id.clone();
+        parsed.student_id = Some(self.student_id.clone());
 
         let mut state = self.state.lock().await;
-        merge_info(&mut state.info, parsed.clone());
+        state.info.merge_from(parsed.clone());
         Ok(parsed)
     }
 
@@ -189,7 +171,7 @@ impl Session {
 
         let parsed = parse::parse_student_info(&html)?;
         let mut state = self.state.lock().await;
-        merge_info(&mut state.info, parsed.clone());
+        state.info.merge_from(parsed.clone());
         Ok(parsed)
     }
 
@@ -209,9 +191,9 @@ impl Session {
         let detail = self.fetch_student_info().await.unwrap_or_default();
 
         let mut state = self.state.lock().await;
-        merge_info(&mut state.info, basic);
-        merge_info(&mut state.info, detail);
-        state.info.student_id = self.student_id.clone();
+        state.info.merge_from(basic);
+        state.info.merge_from(detail);
+        state.info.student_id = Some(self.student_id.clone());
         Ok(state.info.clone())
     }
 
@@ -274,9 +256,7 @@ impl Session {
             })
             .collect();
 
-        let body = self
-            .post_form(path, &[("gnmkdm", gnmkdm)], &form)
-            .await?;
+        let body = self.post_form(path, &[("gnmkdm", gnmkdm)], &form).await?;
 
         let (mut schedule, info) = parse::parse_class_schedule(&body)?;
         parse::attach_academic_term(&mut schedule, term);
@@ -284,14 +264,18 @@ impl Session {
         if week.is_none() {
             let mut state = self.state.lock().await;
             state.schedules.insert(term, schedule.clone());
-            merge_info(&mut state.info, info);
+            state.info.merge_from(info);
         }
 
         Ok(schedule)
     }
 
     /// 获取指定课程在给定学期的开课信息
-    pub async fn course(&self, term: AcademicTerm, name: &str) -> Result<Vec<gnnuhub_core::model::CourseEntry>> {
+    pub async fn course(
+        &self,
+        term: AcademicTerm,
+        name: &str,
+    ) -> Result<Vec<gnnuhub_core::model::CourseEntry>> {
         let schedule = self.class_schedule(term, None).await?;
         Ok(schedule.course(name).to_vec())
     }
@@ -313,11 +297,7 @@ impl Session {
             .post_form(
                 "/kbcx/xskbcx_cxRjc.html",
                 &[("gnmkdm", "N2151")],
-                &[
-                    ("xnm", &year_str),
-                    ("xqm", &xqm_str),
-                    ("xqh_id", "1"),
-                ],
+                &[("xnm", &year_str), ("xqm", &xqm_str), ("xqh_id", "1")],
             )
             .await?;
 
@@ -355,88 +335,5 @@ impl Session {
     pub async fn current_week_schedule(&self, term: AcademicTerm) -> Result<ClassSchedule> {
         let week = self.this_week().await?;
         self.class_schedule(term, Some(week)).await
-    }
-}
-
-/// 把新解析出的信息合并进已有信息
-///
-/// 只覆盖 `Some` 的字段，避免后拉取的页面把已有数据清空。
-fn merge_info(target: &mut StudentInfo, incoming: StudentInfo) {
-    macro_rules! take {
-        ($field:ident) => {
-            if incoming.$field.is_some() {
-                target.$field = incoming.$field;
-            }
-        };
-    }
-
-    take!(name);
-    take!(identity);
-    take!(college);
-    take!(class_name);
-    take!(avatar);
-    take!(instructor);
-    take!(major);
-    take!(gender);
-    take!(birthday);
-    take!(ethnicity);
-    take!(political_status);
-    take!(address);
-    take!(enrollment_year);
-
-    if incoming.document.is_some() {
-        target.document = incoming.document;
-    }
-    if !incoming.student_id.is_empty() {
-        target.student_id = incoming.student_id;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 合并时不应覆盖已有的 Some 值
-    #[test]
-    fn merge_keeps_existing_values() {
-        let mut target = StudentInfo {
-            name: Some("张三".into()),
-            ..Default::default()
-        };
-        let incoming = StudentInfo {
-            college: Some("信息学院".into()),
-            ..Default::default()
-        };
-        merge_info(&mut target, incoming);
-        assert_eq!(target.name.as_deref(), Some("张三"));
-        assert_eq!(target.college.as_deref(), Some("信息学院"));
-    }
-
-    /// 后到的 Some 值应覆盖
-    #[test]
-    fn merge_overwrites_with_new_value() {
-        let mut target = StudentInfo {
-            name: Some("旧名字".into()),
-            ..Default::default()
-        };
-        let incoming = StudentInfo {
-            name: Some("新名字".into()),
-            ..Default::default()
-        };
-        merge_info(&mut target, incoming);
-        assert_eq!(target.name.as_deref(), Some("新名字"));
-    }
-
-    /// 后到的 None 不应清空已有值
-    #[test]
-    fn merge_does_not_clear_with_none() {
-        let mut target = StudentInfo {
-            name: Some("张三".into()),
-            gender: Some("男".into()),
-            ..Default::default()
-        };
-        merge_info(&mut target, StudentInfo::default());
-        assert_eq!(target.name.as_deref(), Some("张三"));
-        assert_eq!(target.gender.as_deref(), Some("男"));
     }
 }

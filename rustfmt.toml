@@ -1,4 +1,10 @@
-# GNNUHub 格式化与静态检查配置
+# GNNUHub 格式化配置
+#
+# 注意：本项目使用 stable 工具链（见 rust-toolchain.toml），因此这里
+# 只配置 stable 支持的选项。`imports_granularity` 与 `group_imports`
+# 属于 nightly-only 特性，写在 stable 配置里会被静默忽略，并在每次
+# 运行时打印「unstable features are only available in nightly channel」
+# 警告，故不在此声明——导入顺序以 rustfmt 默认行为为准。
 
 # 最大行宽，与 rustfmt 默认保持一致
 max_width = 100
@@ -6,12 +12,6 @@ max_width = 100
 # 使用 field init shorthand 与 try shorthand
 use_field_init_shorthand = true
 use_try_shorthand = true
-
-# crate 级别的导入粒度
-imports_granularity = "Crate"
-
-# 合并标准库与外部 crate 的导入
-group_imports = "StdExternalCrate"
 
 # 换行符统一
 newline_style = "Unix"

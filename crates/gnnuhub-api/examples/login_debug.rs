@@ -97,7 +97,8 @@ async fn submit_login(uid: &str, code: &str) -> Result<(), Box<dyn std::error::E
 
             // 继续换取教务系统会话
             println!("\n换取教务系统会话...");
-            match gnnuhub_api::login::exchange_ticket_for_session(&client, &ticket, &tgt, 10).await {
+            match gnnuhub_api::login::exchange_ticket_for_session(&client, &ticket, &tgt, 10).await
+            {
                 Ok(cookies) => {
                     println!("获得 {} 个 Cookie:", cookies.len());
                     for (k, v) in &cookies {
@@ -106,15 +107,12 @@ async fn submit_login(uid: &str, code: &str) -> Result<(), Box<dyn std::error::E
 
                     // 会话是否真的可用，要以能否取到数据为准
                     println!("\n验证会话（拉取学籍信息）...");
-                    let session = gnnuhub_api::Session::new(
-                        client.clone(),
-                        cookies,
-                        student_id.to_string(),
-                    );
+                    let session =
+                        gnnuhub_api::Session::new(client.clone(), cookies, student_id.to_string());
                     match session.fetch_basic_info().await {
                         Ok(info) => {
                             println!("会话有效");
-                            println!("  学号: {}", info.student_id);
+                            println!("  学号: {}", info.student_id.as_deref().unwrap_or("(无)"));
                             println!("  姓名: {}", info.name.as_deref().unwrap_or("(无)"));
                             println!("  身份: {}", info.identity.as_deref().unwrap_or("(无)"));
                             println!("  学院: {}", info.college.as_deref().unwrap_or("(无)"));

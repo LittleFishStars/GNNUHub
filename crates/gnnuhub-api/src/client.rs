@@ -4,14 +4,13 @@ use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use gnnuhub_core::{Error, Result, CAS_HOST, JWGL_BASE_URL};
+use gnnuhub_core::{CAS_HOST, Error, JWGL_BASE_URL, Result};
 
 /// 默认请求超时
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 /// 默认 User-Agent
-const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /// 默认的相邻请求最小间隔
 ///
@@ -210,7 +209,10 @@ impl Client {
         if let Ok(host) = HeaderValue::from_str(host) {
             headers.insert(reqwest::header::HOST, host);
         }
-        headers.insert(reqwest::header::CONNECTION, HeaderValue::from_static("keep-alive"));
+        headers.insert(
+            reqwest::header::CONNECTION,
+            HeaderValue::from_static("keep-alive"),
+        );
         headers
     }
 
@@ -242,7 +244,7 @@ impl Client {
     /// async fn run() -> Result<(), Box<dyn std::error::Error>> {
     ///     let client = Client::with_defaults()?;
     ///     let session = client
-    ///         .login(20250710088, "password", &ManualOcr::new(), None)
+    ///         .login(2500000001, "password", &ManualOcr::new(), None)
     ///         .await?;
     ///     println!("登录成功: {}", session.student_id());
     ///     Ok(())
@@ -279,15 +281,22 @@ impl Client {
             }
         };
 
-        let cookies =
-            crate::login::exchange_ticket_for_session(self, &ticket, &tgt, self.config.max_login_retries)
-                .await?;
+        let cookies = crate::login::exchange_ticket_for_session(
+            self,
+            &ticket,
+            &tgt,
+            self.config.max_login_retries,
+        )
+        .await?;
 
         if cookies.is_empty() {
             return Err(Error::Unauthenticated);
         }
 
-        tracing::info!("登录成功，学号 {student_id}，获得 {} 个 Cookie", cookies.len());
+        tracing::info!(
+            "登录成功，学号 {student_id}，获得 {} 个 Cookie",
+            cookies.len()
+        );
         Ok(crate::session::Session::new(
             self.clone(),
             cookies,

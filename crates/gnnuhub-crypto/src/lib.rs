@@ -139,7 +139,8 @@ mod tests {
         assert!(!out.is_empty());
         for part in out.split(' ') {
             assert!(
-                part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                part.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
                 "非法的 16 进制片段: {part}"
             );
         }

@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use reqwest::header::LOCATION;
 use serde::Deserialize;
 
-use gnnuhub_core::{Error, Result, CAS_BASE_URL, JWGL_BASE_URL};
+use gnnuhub_core::{CAS_BASE_URL, Error, JWGL_BASE_URL, Result};
 use gnnuhub_ocr::OcrEngine;
 
 use crate::captcha::{Captcha, CaptchaResponse};
@@ -256,7 +256,11 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
 /// 即 `SF_cookie_17` 是会话成立的必要条件（它由网关下发并与会话绑定），
 /// 而 `rememberMe=deleteMe` 必须在 [`parse_set_cookie`] 阶段剔除。
 ///
-/// `CASTGC` 属于认证平台，不应出现在教务系统的请求里，因此不参与本流程。
+/// # 关于 `tgt`
+///
+/// `CASTGC` 属于认证平台，**不应出现在教务系统的请求里**，因此本流程
+/// 不使用它。参数保留是为了让调用方能够把 `try_login` 返回的一整份
+/// 结果直接传进来，也便于日后需要时扩展。
 ///
 /// # 错误
 ///
@@ -266,12 +270,14 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
 pub async fn exchange_ticket_for_session(
     client: &Client,
     ticket: &str,
-    castgc: &str,
+    tgt: &str,
     max_hops: u32,
 ) -> Result<HashMap<String, String>> {
+    if !tgt.is_empty() {
+        tracing::trace!("持有 TGT，但教务系统侧不使用 CASTGC，仅留作诊断");
+    }
     // 教务系统侧累积的 Cookie（不含 CASTGC）
     let mut cookies: HashMap<String, String> = HashMap::new();
-
     // /sso 作用域下的 JSESSIONID——链路中转产物，最后必须丢掉
     let mut sso_jsessionid: Option<String> = None;
 
@@ -296,10 +302,7 @@ pub async fn exchange_ticket_for_session(
             cookies.clone()
         };
 
-        let response = match send_with_retry(client, &url, &carry, hops).await {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
+        let response = send_with_retry(client, &url, &carry, hops).await?;
 
         let status = response.status();
         collect_set_cookies(&response, &mut cookies, &mut sso_jsessionid);
@@ -365,7 +368,7 @@ pub async fn exchange_ticket_for_session(
         url = next;
     }
 
-    let _ = castgc; // CASTGC 不参与教务系统的请求
+    let _ = tgt; // CASTGC 不参与教务系统的请求
 
     // 会话是否成立，取决于是否拿到了**根作用域**的 JSESSIONID：
     // 第 3 跳会给出 `JSESSIONID=<B>; Path=/` 覆盖掉第 1 跳的 `/sso` 版本。
@@ -419,7 +422,10 @@ async fn send_with_retry(
     let mut last_err = None;
     for attempt in 1..=MAX_ATTEMPTS {
         let result = client
-            .throttled(|http| http.get(url).header(reqwest::header::COOKIE, &cookie_header))
+            .throttled(|http| {
+                http.get(url)
+                    .header(reqwest::header::COOKIE, &cookie_header)
+            })
             .await;
 
         match result {
@@ -568,10 +574,7 @@ pub async fn login_with_retry(
 
     for attempt in 1..=max_attempts {
         let captcha = fetch_captcha(client).await?;
-        tracing::debug!(
-            "第 {attempt} 次尝试登录，验证码 uid = {}",
-            captcha.uid
-        );
+        tracing::debug!("第 {attempt} 次尝试登录，验证码 uid = {}", captcha.uid);
 
         let code = ocr.recognize(&captcha.image, interactive)?;
 

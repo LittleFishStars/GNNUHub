@@ -81,8 +81,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for e in entries {
                     println!(
                         "      - {} @ {} {} 第{}-{}节 周次={}",
-                        name, e.position, e.time.weekday,
-                        e.time.periods.start, e.time.periods.end, e.time.weeks
+                        name,
+                        e.position,
+                        e.time.weekday,
+                        e.time.periods.start,
+                        e.time.periods.end,
+                        e.time.weeks
                     );
                 }
             }
@@ -101,8 +105,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    ✅ 返回成功");
             println!("      姓名:     {:?}", info.name);
             println!("      性别:     {:?}", info.gender);
-            println!("      证件类型: {:?}", info.document.as_ref().map(|d| &d.kind));
-            println!("      证件号码: {:?}", info.document.as_ref().map(|d| &d.number));
+            println!(
+                "      证件类型: {:?}",
+                info.document.as_ref().map(|d| &d.kind)
+            );
+            println!(
+                "      证件号码: {:?}",
+                info.document.as_ref().map(|d| &d.number)
+            );
             println!("      出生日期: {:?}", info.birthday);
             println!("      民族:     {:?}", info.ethnicity);
             println!("      政治面貌: {:?}", info.political_status);

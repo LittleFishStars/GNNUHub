@@ -14,7 +14,12 @@
 //! 4. 带着 `ticket` 请求 `jwgl.gnnu.edu.cn/sso/lyiotlogin`，
 //!    跟随跳转换取教务系统的 `JSESSIONID`
 //!
-//! 第 1 步有个容易踩的坑：申请验证码时传入的 `id` 与接口返回的
+//! 第 4 步的跳转链共 3 跳，详见
+//! [`login::exchange_ticket_for_session`] 的文档——其中有两处容易踩的坑：
+//! 跳转必须在 `login_slogin` 之前停下（继续跟随会被服务端断开连接），
+//! 且后续请求必须同时携带 `JSESSIONID` 与网关下发的 `SF_cookie_17`。
+//!
+//! 第 1 步也有个坑：申请验证码时传入的 `id` 与接口返回的
 //! `uid` **不是同一个值**，提交时必须使用返回的 `uid`。
 //!
 //! # 示例
@@ -28,12 +33,18 @@
 //! async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = Client::new(ClientConfig::default())?;
 //!     let session = client
-//!         .login(20250710088, "password", &ManualOcr::new(), None)
+//!         .login(2500000001, "password", &ManualOcr::new(), None)
 //!         .await?;
 //!     println!("当前教学周: {:?}", session.this_week().await?);
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # 礼仪
+//!
+//! 教务系统前置了 SafeDog WAF，会因突发请求封禁来源 IP。客户端默认对
+//! 请求做节流（见 [`ClientConfig::request_interval`]），**请勿关闭**，
+//! 也请勿在无必要时反复登录试探接口。
 
 pub mod captcha;
 pub mod client;

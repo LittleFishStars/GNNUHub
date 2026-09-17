@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use gnnuhub_core::model::{
     AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, PeriodRange, PeriodTime,
-    StudentInfo,
+    StudentInfo, parse_credit,
 };
 use gnnuhub_core::{Error, Result};
 use serde::Deserialize;
@@ -271,7 +271,7 @@ pub fn parse_class_schedule(body: &str) -> Result<(ClassSchedule, StudentInfo)> 
     };
 
     for course in courses {
-        let entry = convert_course(&course);
+        let entry = CourseEntry::from(&course);
         schedule.courses.entry(course.name).or_default().push(entry);
     }
 
@@ -279,45 +279,27 @@ pub fn parse_class_schedule(body: &str) -> Result<(ClassSchedule, StudentInfo)> 
 }
 
 /// 把原始课程转换为领域模型
-fn convert_course(raw: &RawCourse) -> CourseEntry {
-    let teachers = if raw.teacher.is_empty() {
-        Vec::new()
-    } else {
-        raw.teacher
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    };
-
-    let classes = if raw.classes.is_empty() {
-        Vec::new()
-    } else {
-        raw.classes
-            .split(';')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    };
-
-    // 节次解析失败时退化为第 0 节，避免整条记录丢失
-    let periods = PeriodRange::parse(&raw.periods).unwrap_or(PeriodRange { start: 0, end: 0 });
-
-    CourseEntry {
-        position: raw.position.clone(),
-        teachers,
-        time: ClassTime {
-            weeks: raw.weeks.clone(),
-            weekday: raw.weekday.clone(),
-            periods,
-        },
-        classes,
-        building: raw.building.clone(),
-        nature: raw.nature.clone(),
-        category: raw.category.clone(),
-        exam_mode: raw.exam_mode.clone(),
-        campus: raw.campus.clone(),
-        credit: raw.credit.parse().unwrap_or(0.0),
+///
+/// 字段逐一对齐接口返回；缺失或畸形的值退化处理而非报错，
+/// 保证单条记录异常不会毁掉整张课表。
+impl From<&RawCourse> for CourseEntry {
+    fn from(raw: &RawCourse) -> Self {
+        Self {
+            position: raw.position.clone(),
+            teachers: Self::split_list(&raw.teacher, ','),
+            time: ClassTime {
+                weeks: raw.weeks.clone(),
+                weekday: raw.weekday.clone(),
+                periods: PeriodRange::parse(&raw.periods).unwrap_or_default(),
+            },
+            classes: Self::split_list(&raw.classes, ';'),
+            building: raw.building.clone(),
+            nature: raw.nature.clone(),
+            category: raw.category.clone(),
+            exam_mode: raw.exam_mode.clone(),
+            campus: raw.campus.clone(),
+            credit: parse_credit(&raw.credit),
+        }
     }
 }
 
@@ -474,7 +456,8 @@ mod tests {
 
     /// 课表解析
     #[test]
-    fn parses_class_schedule() {        let body = r#"{
+    fn parses_class_schedule() {
+        let body = r#"{
             "xsxx": {"XM":"张三","ZYMC":"信息学院","BJMC":"计算机2201班","JSXM":"李老师"},
             "kbList": [
               {

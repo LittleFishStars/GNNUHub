@@ -63,11 +63,7 @@ pub trait OcrEngine: Send + Sync {
     ///
     /// 当实现无法完成识别（例如需要人工输入但没有提供回调）时，
     /// 返回 [`Error::CaptchaRequiresManualInput`]。
-    fn recognize(
-        &self,
-        image_base64: &str,
-        interactive: Option<&InteractiveFn>,
-    ) -> Result<String>;
+    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String>;
 
     /// 识别器的可读名称，用于日志与诊断
     fn name(&self) -> &'static str;
@@ -121,13 +117,8 @@ impl ManualOcr {
 }
 
 impl OcrEngine for ManualOcr {
-    fn recognize(
-        &self,
-        image_base64: &str,
-        interactive: Option<&InteractiveFn>,
-    ) -> Result<String> {
-        let callback =
-            interactive.ok_or(Error::CaptchaRequiresManualInput)?;
+    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
+        let callback = interactive.ok_or(Error::CaptchaRequiresManualInput)?;
 
         // 规范化成 data URL 形式再交给界面层，避免前缀缺失导致渲染失败
         let data_url = if image_base64.starts_with("data:") {
