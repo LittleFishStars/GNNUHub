@@ -139,13 +139,19 @@ impl OcrEngine for ManualOcr {
     }
 }
 
-/// 校验验证码格式是否符合「4 位字母数字」
-fn validate_captcha_format(input: &str) -> Result<()> {
-    let len = input.chars().count();
-    if len != CAPTCHA_LENGTH {
+/// 校验验证码格式是否合法
+///
+/// 规则：恰好 [`CAPTCHA_LENGTH`] 个字符，且都落在 [`CAPTCHA_ALPHABET`] 之内。
+///
+/// 注意**不能**用 [`char::is_ascii_alphanumeric`] 校验：实测样本
+/// （`captcha_samples/0009.png`）出现过 `+` 号字符，用字母数字规则会
+/// 把合法验证码判为非法。
+pub fn validate_captcha_format(input: &str) -> Result<()> {
+    let chars: Vec<char> = input.chars().collect();
+    if chars.len() != CAPTCHA_LENGTH {
         return Err(Error::InvalidCaptcha);
     }
-    if !input.chars().all(|c| c.is_ascii_alphanumeric()) {
+    if !chars.iter().all(|c| CAPTCHA_ALPHABET.contains(c)) {
         return Err(Error::InvalidCaptcha);
     }
     Ok(())
@@ -153,6 +159,21 @@ fn validate_captcha_format(input: &str) -> Result<()> {
 
 /// 验证码字符数
 pub const CAPTCHA_LENGTH: usize = 4;
+
+/// 验证码可能出现的字符集合
+///
+/// 依据 60 张真实样本（`captcha_samples/`）的实测结果归纳：大写字母、
+/// 小写字母、数字混排，且**不含标点**。样本中曾误判出 `+`，复核后确认
+/// 那是 `t`（竖线带横杠）的误读，服务器并未使用标点符号。
+///
+/// 注意该集合是**实测归纳**而非服务端公布值，若后续遇到新字符应放宽
+/// 而不是直接拒绝，见 [`validate_captcha_format`] 的说明。
+pub const CAPTCHA_ALPHABET: &[char] = &[
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',
+    'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b',
+    'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u',
+    'v', 'w', 'x', 'y', 'z',
+];
 
 /// 验证码图片的固定宽度
 pub const CAPTCHA_WIDTH: u32 = 100;
@@ -211,6 +232,25 @@ mod tests {
         let engine = ManualOcr::new();
         let cb: &InteractiveFn = &|_img: &str| Ok(Some("ab-c".to_string()));
         assert!(engine.recognize("AAAA", Some(cb)).is_err());
+    }
+
+    /// 大小写混合、纯数字、纯字母都应被接受
+    ///
+    /// 回归测试：早期版本用 `is_ascii_alphanumeric()` 校验，会连带把
+    /// 合法输入判错；同时确认大小写不会被规范化。
+    #[test]
+    fn validate_accepts_mixed_case_and_digits() {
+        for s in ["aB3d", "ABCD", "abcd", "1234", "a1B2", "Zz9Q"] {
+            assert!(validate_captcha_format(s).is_ok(), "应接受 {s}");
+        }
+    }
+
+    /// 长度不对或含标点/空格的输入应被拒绝
+    #[test]
+    fn validate_rejects_bad_input() {
+        for s in ["abc", "abcde", "ab c", "ab+c", "ab.c", "", "ab中c"] {
+            assert!(validate_captcha_format(s).is_err(), "应拒绝 {s:?}");
+        }
     }
 
     /// 用户取消应返回错误
