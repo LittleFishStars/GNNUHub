@@ -21,7 +21,7 @@
 //!
 //! 完整用法见 `examples/` 目录下的可运行示例。
 //!
-//! ```ignore
+//! ```no_run
 //! use gnnuhub_api::{Client, ClientConfig};
 //! use gnnuhub_ocr::ManualOcr;
 //!

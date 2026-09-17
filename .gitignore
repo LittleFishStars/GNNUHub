@@ -29,6 +29,15 @@ secrets.toml
 /captcha_grid*.png
 /cap.json
 
+# 调试时产生的临时文件（验证码图片、票据、Cookie jar 等）
+/captcha_login.png
+/captcha_state.json
+/cap_probe.png
+/encpw.txt
+/enctok.txt
+/jar*.txt
+/uid_now.txt
+
 # 验证码样本（体积大且含敏感数据，不入库）
 /captcha_samples/
 

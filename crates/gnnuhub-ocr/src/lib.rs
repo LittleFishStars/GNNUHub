@@ -20,7 +20,7 @@
 //!
 //! # 示例
 //!
-//! ```ignore
+//! ```no_run
 //! use gnnuhub_ocr::{InteractiveFn, ManualOcr, OcrEngine};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {

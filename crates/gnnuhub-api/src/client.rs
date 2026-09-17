@@ -107,7 +107,26 @@ impl Client {
     ///
     /// 对应 Python 版 `login.py` 的 `_get_headers`。其中
     /// `loginUserToken` 需要对当前时间戳做 RSA 加密。
+    ///
+    /// # 重要
+    ///
+    /// 返回的头部**只能用于 `cas.gnnu.edu.cn`**：其中包含
+    /// `Host: cas.gnnu.edu.cn`，若被复用到教务系统等其他域名的请求上，
+    /// 会造成 Host 与 SNI 不匹配，服务端会直接关闭 TLS 连接
+    /// （表现为 `peer closed connection without sending TLS close_notify`）。
+    ///
+    /// 这个 `Host` 覆盖是必需的：CAS 接口所在的反向代理只认
+    /// `Host: cas.gnnu.edu.cn`，用默认推导值会被拒绝。
+    ///
+    /// 若确实需要跨域复用，请改用 [`Client::cas_headers_for`]。
     pub fn cas_headers(&self) -> HeaderMap {
+        self.cas_headers_for(CAS_HOST)
+    }
+
+    /// 构造统一认证平台接口所需的请求头，并指定 `Host`
+    ///
+    /// 仅在需要覆盖 `Host` 时使用；一般场景请用 [`Client::cas_headers`]。
+    pub fn cas_headers_for(&self, host: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-Requested-With",
@@ -121,7 +140,7 @@ impl Client {
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded;charset=utf-8"),
         );
-        if let Ok(host) = HeaderValue::from_str(CAS_HOST) {
+        if let Ok(host) = HeaderValue::from_str(host) {
             headers.insert(reqwest::header::HOST, host);
         }
         headers.insert(reqwest::header::CONNECTION, HeaderValue::from_static("keep-alive"));
@@ -149,7 +168,7 @@ impl Client {
     ///
     /// # 示例
     ///
-    /// ```ignore
+    /// ```no_run
     /// use gnnuhub_api::Client;
     /// use gnnuhub_ocr::ManualOcr;
     ///
@@ -245,6 +264,28 @@ mod tests {
         assert!(headers.contains_key("loginToken"));
         assert!(headers.contains_key(reqwest::header::CONTENT_TYPE));
         assert!(headers.contains_key(reqwest::header::HOST));
+    }
+
+    /// `cas_headers` 的 Host 必须指向认证平台
+    ///
+    /// 这个头部只对 CAS 域有效；复用给其他域名会导致 TLS 握手被服务端关闭。
+    #[test]
+    fn cas_headers_host_is_cas() {
+        let client = Client::with_defaults().unwrap();
+        let headers = client.cas_headers();
+        assert_eq!(
+            headers.get(reqwest::header::HOST).unwrap(),
+            CAS_HOST,
+            "cas_headers 的 Host 必须是认证平台域名"
+        );
+    }
+
+    /// `cas_headers_for` 应能覆盖 Host，供跨域场景使用
+    #[test]
+    fn cas_headers_for_overrides_host() {
+        let client = Client::with_defaults().unwrap();
+        let headers = client.cas_headers_for("example.com");
+        assert_eq!(headers.get(reqwest::header::HOST).unwrap(), "example.com");
     }
 
     /// loginUserToken 应是合法的 HeaderValue（不含空格等非法字符）

@@ -27,6 +27,23 @@ const TICKETS_PATH: &str = "/lyuapServer/v1/tickets";
 const SSO_LOGIN_PATH: &str = "/sso/lyiotlogin";
 
 /// 全局登录成功后的票据
+///
+/// 实测响应有两种形态：
+///
+/// 成功（ticket 直接放在顶层）：
+/// ```json
+/// { "tgt": "TGT-...", "ticket": "ST-..." }
+/// ```
+///
+/// 失败（包在 meta 里）：
+/// ```json
+/// { "meta": { "success": true, "statusCode": 200, "message": "ok" },
+///   "data": { "code": "CODEFALSE" } }
+/// ```
+///
+/// **注意**：失败响应中 `meta.success` 可能是 `true`，而
+/// `statusCode` 在部分响应里是**整数**而非字符串。因此判断登录结果
+/// 必须依据 `data.code`，不能依赖 `meta.success`。
 #[derive(Debug, Clone, Deserialize)]
 struct TicketResponse {
     data: Option<TicketData>,
@@ -36,22 +53,35 @@ struct TicketResponse {
 /// 成功时的 data 字段
 #[derive(Debug, Clone, Deserialize)]
 struct TicketData {
-    /// 票据
-    ticket: String,
+    /// 业务状态码，成功时为空或 "SUCCESS"，验证码错误时为 "CODEFALSE"
+    #[serde(default)]
+    code: String,
 }
 
-/// 失败时的 meta 字段
+/// 响应中的 meta 字段
 #[derive(Debug, Clone, Deserialize)]
 struct TicketMeta {
-    /// 认证是否成功。`statusCode` 与 `message` 已足以判定结果，
-    /// 保留该字段以便日志与后续扩展。
+    /// 该字段不可靠，部分失败响应中仍为 `true`，仅用于日志
     #[serde(default)]
     #[allow(dead_code)]
     success: bool,
+    /// 状态码。实测可能是**整数**（如 200）也可能是字符串，
+    /// 因此用 `serde_json::Value` 兼容两种形态。
     #[serde(rename = "statusCode", default)]
-    status_code: String,
+    status_code: serde_json::Value,
     #[serde(default)]
     message: String,
+}
+
+impl TicketMeta {
+    /// 把 statusCode 归一化成字符串
+    fn status_code_str(&self) -> String {
+        match &self.status_code {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        }
+    }
 }
 
 /// 一次登录尝试的结果
@@ -111,7 +141,7 @@ pub async fn try_login(
     }
 
     let body = response.text().await?;
-    tracing::debug!("票据接口原始响应: {}", truncate(&body, 300));
+    tracing::debug!("票据接口原始响应: {}", truncate(&body, 500));
 
     parse_ticket_response(&body)
 }
@@ -119,29 +149,49 @@ pub async fn try_login(
 /// 解析票据接口的响应体
 ///
 /// 抽成独立函数以便单元测试覆盖各种响应形态。
+///
+/// # 判定逻辑
+///
+/// 1. 顶层同时存在 `tgt` 与 `ticket` → 成功
+/// 2. 存在 `meta`：取 `statusCode` 与 `message` 判定失败原因
+/// 3. 存在 `data.code`：`CODEFALSE` 表示验证码错误
 pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
     // 先尝试「成功」形态：{"tgt": "...", "ticket": "..."}
-    if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(body)
+    if let Ok(map) = serde_json::from_str::<HashMap<String, serde_json::Value>>(body)
         && let (Some(tgt), Some(ticket)) = (map.get("tgt"), map.get("ticket"))
+        && let (Some(tgt), Some(ticket)) = (tgt.as_str(), ticket.as_str())
     {
         return Ok(LoginOutcome::Success {
-            tgt: tgt.clone(),
-            ticket: ticket.clone(),
+            tgt: tgt.to_string(),
+            ticket: ticket.to_string(),
         });
     }
 
-    // 再尝试带 meta 的形态
     let parsed: TicketResponse = serde_json::from_str(body).map_err(Error::Json)?;
 
+    // 优先看 data.code —— 这是最可靠的成功判据
+    if let Some(data) = &parsed.data {
+        let code = data.code.trim();
+        if code.is_empty() || code.eq_ignore_ascii_case("SUCCESS") {
+            return Err(Error::TicketMissing(
+                "响应声明成功但未携带 ticket".to_string(),
+            ));
+        }
+        if code.eq_ignore_ascii_case("CODEFALSE") {
+            return Ok(LoginOutcome::CaptchaIncorrect);
+        }
+        return Err(Error::TicketMissing(format!("未识别的业务码: {code}")));
+    }
+
+    // 没有 data 时依据 meta 判定
     if let Some(meta) = parsed.meta {
-        let status_code = meta.status_code.as_str();
+        let status_code = meta.status_code_str();
         let message = if meta.message.is_empty() {
-            status_code.to_string()
+            status_code.clone()
         } else {
             meta.message.clone()
         };
 
-        // 验证码错误：可以换一张重试
         if status_code.eq_ignore_ascii_case("CODEFALSE")
             || message.contains("验证码")
             || message.to_lowercase().contains("code")
@@ -149,7 +199,6 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
             return Ok(LoginOutcome::CaptchaIncorrect);
         }
 
-        // 凭据错误：重试无意义
         if status_code.eq_ignore_ascii_case("USERNAMEORPASSWORDERROR")
             || message.contains("密码")
             || message.contains("用户名")
@@ -160,21 +209,36 @@ pub fn parse_ticket_response(body: &str) -> Result<LoginOutcome> {
         return Err(Error::TicketMissing(message));
     }
 
-    if let Some(data) = parsed.data {
-        return Ok(LoginOutcome::Success {
-            // 部分版本不返回 tgt，此时用 ticket 占位
-            tgt: String::new(),
-            ticket: data.ticket,
-        });
-    }
-
     Err(Error::TicketMissing(truncate(body, 200).to_string()))
 }
 
 /// 用 ticket 换取教务系统的会话 Cookie
 ///
-/// 对应 Python 版 `get_cookies` 与 `Student.__init__` 中的 SSO 跳转。
-/// 返回教务系统域下的 Cookie 键值对。
+/// 教务系统的 SSO 交换链路**较长且中间会经过疑似登录页的中转**，
+/// 以下是实测得到的完整链路：
+///
+/// ```text
+/// GET /sso/lyiotlogin?ticket=ST-xxx
+///   → 302 /sso/lyiotlogin            （种下 /sso 下的 JSESSIONID）
+/// GET /sso/lyiotlogin
+///   → 302 /ticketlogin?uid=...&verify=...
+/// GET /ticketlogin?...
+///   → 302 /xtgl/login_slogin.html    （⚠️ 这是中转，不是失败）
+/// GET /xtgl/login_slogin.html
+///   → 302 /xtgl/index_initMenu.html  （种下 / 下的 JSESSIONID，会话成立）
+/// ```
+///
+/// **重要**：`login_slogin.html` 虽然路径名像登录页，但在持有有效
+/// ticket 的流程中它只是中转站，必须继续跟随。判断会话是否成立的
+/// 依据是最终是否落在 `index_initMenu` 或是遇到了非 3xx 响应。
+///
+/// 如果链路中跳回认证平台（`cas.gnnu.edu.cn`），说明 ticket 已被
+/// 使用或失效。
+///
+/// # 错误
+///
+/// - ticket 未被接受时返回 [`Error::SsoRedirect`]
+/// - 跳转超出最大次数时返回 [`Error::LoginRetriesExhausted`]
 pub async fn exchange_ticket_for_session(
     client: &Client,
     ticket: &str,
@@ -186,45 +250,43 @@ pub async fn exchange_ticket_for_session(
         cookies.insert("CASTGC".to_string(), castgc.to_string());
     }
 
+    // 第一跳必须携带 ticket 才能完成兑换
     let mut url = format!("{JWGL_BASE_URL}{SSO_LOGIN_PATH}?ticket={ticket}");
     let mut hops = 0;
+    // 跳转次数上限取配置值与 10 的较大者，SSO 链路至少需要 4 跳
+    let hop_limit = max_hops.max(10);
 
     loop {
         hops += 1;
-        if hops > max_hops {
+        if hops > hop_limit {
             return Err(Error::LoginRetriesExhausted {
-                attempts: max_hops,
+                attempts: hop_limit,
             });
         }
 
-        let response = client
-            .http()
-            .get(&url)
-            .header(reqwest::header::COOKIE, build_cookie_header(&cookies))
-            .send()
-            .await?;
+        let response = match send_with_retry(client, &url, &cookies, hops).await {
+            Ok(r) => r,
+            Err(e) => return Err(e),
+        };
 
         let status = response.status();
+        collect_set_cookies(&response, &mut cookies);
+        tracing::trace!("SSO 第 {hops} 跳 {url} -> {status}");
 
-        // 收集本跳的 Set-Cookie
-        for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
-            if let Ok(text) = value.to_str()
-                && let Some((name, val)) = parse_set_cookie(text)
-            {
-                cookies.insert(name, val);
-            }
-        }
-
-        // 非重定向意味着已经落在目标页面
+        // 非重定向说明已落在目标页面，会话建立完成
         if !status.is_redirection() {
             break;
         }
 
-        let location = response
+        let Some(location) = response
             .headers()
             .get(LOCATION)
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| Error::SsoRedirect("重定向缺少 Location 头".to_string()))?;
+        else {
+            // 3xx 但没有 Location，无法继续，视为链路终止
+            tracing::warn!("SSO 第 {hops} 跳返回 {status} 但缺少 Location");
+            break;
+        };
 
         let next = if location.starts_with("http") {
             location.to_string()
@@ -232,14 +294,11 @@ pub async fn exchange_ticket_for_session(
             format!("{JWGL_BASE_URL}{location}")
         };
 
-        // SSO 往返过程中可能跳回 CAS 或跳往其他域，只有落在教务系统
-        // 且不再是 sso 路径时才算完成
         let parsed = url::Url::parse(&next)
             .map_err(|e| Error::SsoRedirect(format!("非法的跳转地址 {next}: {e}")))?;
-        let host = parsed.host_str().unwrap_or_default().to_string();
+        let host = parsed.host_str().unwrap_or_default();
 
         if host == gnnuhub_core::CAS_HOST {
-            // 跳回认证平台说明 ticket 未被接受
             return Err(Error::SsoRedirect(
                 "ticket 未被教务系统接受，跳回了认证平台".to_string(),
             ));
@@ -250,15 +309,88 @@ pub async fn exchange_ticket_for_session(
             )));
         }
 
-        tracing::trace!("SSO 跳转 {} -> {}", url, next);
+        // 到达首页说明会话已建立，无需继续跟随
+        if parsed.path().contains("index_initMenu") {
+            tracing::debug!("SSO 已到达教务系统首页");
+            break;
+        }
+
         url = next;
     }
 
     if !cookies.contains_key("JSESSIONID") {
-        tracing::warn!("未获得 JSESSIONID，后续请求可能失败");
+        return Err(Error::Unauthenticated);
     }
 
+    tracing::info!("SSO 交换完成，共 {hops} 跳，获得 {} 个 Cookie", cookies.len());
     Ok(cookies)
+}
+
+/// 发起一次 SSO 跳转请求，对**传输层瞬时故障**做有限重试
+///
+/// 学校网关在校外访问时偶发直接关闭 TLS 连接
+/// （`peer closed connection without sending TLS close_notify`），
+/// 这类错误与请求内容无关，重试即可恢复；而 HTTP 状态码层面的
+/// 失败（如 404）不会重试，交由调用方判断。
+///
+/// 注意：SSO 每一跳都可能种下新 Cookie，重试时沿用同一份 Cookie 集合，
+/// 不会破坏会话状态。
+async fn send_with_retry(
+    client: &Client,
+    url: &str,
+    cookies: &HashMap<String, String>,
+    hop: u32,
+) -> Result<reqwest::Response> {
+    /// 单跳最多尝试次数
+    const MAX_ATTEMPTS: u32 = 3;
+    /// 重试前的等待时间
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+    let mut last_err = None;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let result = client
+            .http()
+            .get(url)
+            .header(reqwest::header::COOKIE, build_cookie_header(cookies))
+            .send()
+            .await;
+
+        match result {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                tracing::warn!("SSO 第 {hop} 跳第 {attempt} 次请求失败: {e}");
+                // 打出完整错误链，便于定位是 DNS / TLS / 代理哪一层的问题
+                let mut source: Option<&(dyn std::error::Error + 'static)> =
+                    std::error::Error::source(&e);
+                while let Some(s) = source {
+                    tracing::warn!("  起因: {s}");
+                    source = std::error::Error::source(s);
+                }
+                last_err = Some(e);
+                if attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(RETRY_DELAY).await;
+                }
+            }
+        }
+    }
+
+    Err(Error::Network(
+        last_err.expect("循环至少执行一次，必然记录过错误"),
+    ))
+}
+
+/// 收集响应中的所有 Set-Cookie
+///
+/// 注意同名 Cookie 可能带不同 Path 出现多次（`/sso` 与 `/` 各一份），
+/// 这里以**后出现的为准**，因为链路上后种的通常是根路径下的有效会话。
+fn collect_set_cookies(response: &reqwest::Response, out: &mut HashMap<String, String>) {
+    for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
+        if let Ok(text) = value.to_str()
+            && let Some((name, val)) = parse_set_cookie(text)
+        {
+            out.insert(name, val);
+        }
+    }
 }
 
 /// 把 Cookie 映射拼成请求头
@@ -395,9 +527,32 @@ mod tests {
         }
     }
 
-    /// 验证码错误响应能被识别
+    /// 验证码错误响应能被识别（实测形态：statusCode 为整数）
     #[test]
-    fn parses_captcha_error() {
+    fn parses_captcha_error_with_integer_status() {
+        let body = r#"{"meta":{"success":true,"statusCode":200,"message":"ok"},
+                       "data":{"code":"CODEFALSE"}}"#;
+        let outcome = parse_ticket_response(body).unwrap();
+        assert!(
+            matches!(outcome, LoginOutcome::CaptchaIncorrect),
+            "应识别为验证码错误，实际 {outcome:?}"
+        );
+    }
+
+    /// meta.success 为 true 但 data.code 表示失败时，应判定为失败
+    ///
+    /// 这是实测中发现的坑：不能依赖 meta.success 判断结果。
+    #[test]
+    fn ignores_misleading_meta_success() {
+        let body = r#"{"meta":{"success":true,"statusCode":"200","message":"ok"},
+                       "data":{"code":"CODEFALSE"}}"#;
+        let outcome = parse_ticket_response(body).unwrap();
+        assert!(matches!(outcome, LoginOutcome::CaptchaIncorrect));
+    }
+
+    /// statusCode 为字符串时也能正确解析
+    #[test]
+    fn parses_captcha_error_with_string_status() {
         let body = r#"{"meta":{"success":false,"statusCode":"CODEFALSE","message":"验证码错误"}}"#;
         let outcome = parse_ticket_response(body).unwrap();
         assert!(matches!(outcome, LoginOutcome::CaptchaIncorrect));
@@ -411,15 +566,11 @@ mod tests {
         assert!(matches!(outcome, LoginOutcome::BadCredentials(_)));
     }
 
-    /// data 形态的成功响应也能解析
+    /// data.code 表示成功但缺少 ticket 时应报错
     #[test]
-    fn parses_data_form_success() {
-        let body = r#"{"data":{"ticket":"ST-fromdata"}}"#;
-        let outcome = parse_ticket_response(body).unwrap();
-        match outcome {
-            LoginOutcome::Success { ticket, .. } => assert_eq!(ticket, "ST-fromdata"),
-            other => panic!("期望 Success，实际 {other:?}"),
-        }
+    fn rejects_success_without_ticket() {
+        let body = r#"{"data":{"code":"SUCCESS"}}"#;
+        assert!(parse_ticket_response(body).is_err());
     }
 
     /// 完全无法识别的响应应报错

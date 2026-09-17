@@ -25,3 +25,6 @@ url.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 tracing-subscriber.workspace = true
+base64.workspace = true
+gnnuhub-crypto.workspace = true
+gnnuhub-ocr.workspace = true

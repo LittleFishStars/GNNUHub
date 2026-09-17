@@ -430,6 +430,7 @@ name = "gnnuhub-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "gnnuhub-core",
  "gnnuhub-crypto",
  "gnnuhub-ocr",
