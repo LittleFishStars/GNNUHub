@@ -46,6 +46,10 @@ use base64::Engine as _;
 use gnnuhub_core::{Error, Result};
 use image::DynamicImage;
 
+pub mod bitmap;
+
+pub use bitmap::{BitmapLibrary, BitmapOcr, GlyphEntry};
+
 #[cfg(feature = "tesseract")]
 pub mod tesseract;
 

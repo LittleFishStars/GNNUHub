@@ -474,6 +474,7 @@ dependencies = [
  "base64",
  "gnnuhub-core",
  "image",
+ "serde_json",
  "thiserror",
  "tracing",
 ]
