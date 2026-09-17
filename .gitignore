@@ -1,0 +1,40 @@
+# Rust 构建产物
+/target/
+**/*.rs.bk
+*.pdb
+
+# 依赖锁文件（库项目建议提交，见下方注释）
+# Cargo.lock 保留以固定依赖版本
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 环境变量与凭据（切勿提交）
+.env
+.env.local
+*.key
+credentials.json
+secrets.toml
+
+# 测试与调试产物
+/captcha_sample*.png
+/captcha_grid*.png
+/cap.json
+
+# 验证码样本（体积大且含敏感数据，不入库）
+/captcha_samples/
+
+# 日志
+*.log
+/logs/
+
+# 沙箱回收站目录（删除文件时自动产生）
+.Trash-*/

@@ -1,0 +1,17 @@
+# GNNUHub 格式化与静态检查配置
+
+# 最大行宽，与 rustfmt 默认保持一致
+max_width = 100
+
+# 使用 field init shorthand 与 try shorthand
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# crate 级别的导入粒度
+imports_granularity = "Crate"
+
+# 合并标准库与外部 crate 的导入
+group_imports = "StdExternalCrate"
+
+# 换行符统一
+newline_style = "Unix"

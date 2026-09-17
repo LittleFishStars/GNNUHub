@@ -1,0 +1,19 @@
+[package]
+name = "gnnuhub-ocr"
+description = "验证码识别抽象层与实现"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+gnnuhub-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+image.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+anyhow.workspace = true
