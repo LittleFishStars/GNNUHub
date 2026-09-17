@@ -18,14 +18,18 @@
 
 ```bash
 # 用现有凭据登录后抓取（约 15-25 次请求，一次性完成）
+# 验证码通过 captcha.png / captcha.txt 文件桥交互
 GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
-  cargo run -p gnnuhub-api --example js_recon
+  cargo run -p gnnuhub-api --example js_recon_once
 ```
 
 产物落在 `tools/js-recon/out/`：
 - `pages/*.html` — 各页面原始 HTML
 - `scripts/*.js`  — 提取并下载的 JS 文件
 - `index.json`    — 抓取清单与来源对应关系
+
+抓取时脚本会把验证码写到 `captcha.png` 并轮询等待
+`captcha.txt`（你写好字符后它自动继续，**全程一个进程，会话不断**）。
 
 ### 2. 离线分析（不联网）
 
@@ -47,9 +51,39 @@ GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
 | `gnmkdm` | 各功能模块的菜单代码 |
 | `/xtgl/` `/xsxxxggl/` `/kbcx/` | 接口路径 |
 
+### 3. 接口实测验证（联网，请求数极少）
+
+逆向得出的结论需要用真数据确认。`verify_endpoints` 示例在
+**一次登录内**跑完多个待验证接口，把请求数压到最低：
+
+```bash
+GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
+  cargo run -p gnnuhub-api --example verify_endpoints
+```
+
+它验证：
+1. 课表接口 `/kbcx/xskbcx_cxXsgrkb.html`（含 `csrftoken` 是否必需）
+2. 学籍接口 `/xsxxxggl/xsgrxxwh_cxXsGrxx.html`（字段解析）
+3. 把真实 HTML 存档到 `out/pages/xsgrxx_filled.html` 供离线核对
+
+结论见 `out/verification.md`。
+
+### 4. 回归测试（离线）
+
+真实页面结构已固化为夹具，改动解析逻辑后会立刻发现回归：
+
+```bash
+cargo test -p gnnuhub-api --test real_page_check
+```
+
+夹具在 `crates/gnnuhub-api/tests/fixtures/`，**已脱敏**。
+
 ## 注意事项
 
 - **抓取只需跑一次**。产物入库后，后续分析全部离线完成。
 - JS 文件较多时优先读 `login` / `index` / `common` 命名的，以及体积最大的。
 - 教务系统多用 jQuery + 拼接式 URL，搜索 `.html?` 和 `.do?` 能快速定位接口。
 - 部分 JS 可能被压缩，先看有没有 `.min.js` 之外的同名未压缩版本。
+- **字段 id 极易数错字符**（如政治面貌是 `col_zzmmm` 两个 z，不是三个）。
+  一律用 `grep -o 'id="col_[^"]*"'` 机器提取，**别用肉眼数**。
+  我在这上面栽过一次，误判成实现有 bug，白排查很久。

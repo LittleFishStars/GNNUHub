@@ -50,3 +50,6 @@ secrets.toml
 
 # 前端抓包产物（体积大，按需重新抓取）
 /tools/js-recon/out/
+/tools/js-recon/captcha.png
+/tools/js-recon/captcha.txt
+/.scratch/
