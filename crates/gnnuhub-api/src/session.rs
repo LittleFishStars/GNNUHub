@@ -76,6 +76,34 @@ impl Session {
         crate::login::build_cookie_header(&self.cookies)
     }
 
+    /// 按原样请求一个站内路径，返回响应体文本
+    ///
+    /// 与 [`Session::get`] 的区别：`path` 已经包含查询串，不再额外拼接。
+    /// 主要用于抓取静态资源（前端 JS / HTML）做离线分析。
+    ///
+    /// 请求仍然经过客户端节流，避免触发网关风控。
+    pub async fn fetch_raw(&self, path: &str) -> Result<String> {
+        let url = if path.starts_with("http") {
+            path.to_string()
+        } else {
+            format!("{JWGL_BASE_URL}{path}")
+        };
+        let cookie = self.cookie_header();
+        let response = self
+            .client
+            .throttled(|http| http.get(&url).header(reqwest::header::COOKIE, &cookie))
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::UnexpectedStatus {
+                status: status.as_u16(),
+                url,
+            });
+        }
+        Ok(response.text().await?)
+    }
+
     /// 发起一个带会话 Cookie 的 GET 请求
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");

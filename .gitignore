@@ -47,3 +47,6 @@ secrets.toml
 
 # 沙箱回收站目录（删除文件时自动产生）
 .Trash-*/
+
+# 前端抓包产物（体积大，按需重新抓取）
+/tools/js-recon/out/
