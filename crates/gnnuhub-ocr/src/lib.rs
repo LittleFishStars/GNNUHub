@@ -48,7 +48,9 @@ use image::DynamicImage;
 
 pub mod bitmap;
 
-pub use bitmap::{BitmapLibrary, BitmapOcr, GlyphEntry};
+pub use bitmap::{
+    BitmapLibrary, BitmapOcr, EMBEDDED_LIBRARY_JSON, GlyphEntry, embedded_library,
+};
 
 #[cfg(feature = "tesseract")]
 pub mod tesseract;

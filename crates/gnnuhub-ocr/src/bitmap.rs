@@ -246,6 +246,13 @@ impl BitmapOcr {
         Ok(Self::new(BitmapLibrary::from_path(path)?))
     }
 
+    /// 用随 crate 内嵌的字库构造识别器（推荐）
+    ///
+    /// 内嵌字库由 60 张真实样本构建，无需任何外部文件。
+    pub fn embedded() -> Result<Self> {
+        Ok(Self::new(embedded_library()?))
+    }
+
     /// 设置模糊匹配的最大汉明距离
     pub fn with_fuzzy_distance(mut self, d: usize) -> Self {
         self.fuzzy_distance = d;
@@ -444,9 +451,29 @@ pub fn extract_glyphs_for_bench(image_base64: &str) -> Result<Vec<Glyph>> {
     extract_glyphs(&img)
 }
 
-/// 把字库嵌入二进制（用于没有文件系统的场景）
-pub fn embedded_library(json: &str) -> Result<BitmapLibrary> {
-    BitmapLibrary::from_json(json)
+/// 随 crate 一起打包的字库 JSON
+///
+/// 由 60 张真实样本构建（见 `assets/bitmap_lib.json`）：
+/// 65 个字形、覆盖 59 个字符，对样本集字形级命中率 100%。
+///
+/// 字库是「数据」而非代码，把它内嵌进来的好处是 [`BitmapOcr::embedded`]
+/// 无需文件系统即可工作，用在移动端/嵌入式场景时尤其方便。
+pub const EMBEDDED_LIBRARY_JSON: &str = include_str!("../assets/bitmap_lib.json");
+
+/// 从内嵌字库构造识别器
+///
+/// 这是最常用的入口：不需要任何外部文件。
+///
+/// # 示例
+///
+/// ```no_run
+/// use gnnuhub_ocr::{BitmapOcr, OcrEngine};
+///
+/// let engine = BitmapOcr::embedded().expect("内嵌字库应能解析");
+/// assert_eq!(engine.name(), "bitmap");
+/// ```
+pub fn embedded_library() -> Result<BitmapLibrary> {
+    BitmapLibrary::from_json(EMBEDDED_LIBRARY_JSON)
 }
 
 /// 便捷函数：把 base64 图片的字节解码出来（供测试使用）
