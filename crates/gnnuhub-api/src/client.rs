@@ -239,12 +239,13 @@ impl Client {
     ///
     /// ```no_run
     /// use gnnuhub_api::Client;
-    /// use gnnuhub_ocr::ManualOcr;
+    /// use gnnuhub_ocr::FailoverOcr;
     ///
     /// async fn run() -> Result<(), Box<dyn std::error::Error>> {
     ///     let client = Client::with_defaults()?;
+    ///     let ocr = FailoverOcr::recommended()?;
     ///     let session = client
-    ///         .login(2500000001, "password", &ManualOcr::new(), None)
+    ///         .login(2500000001, "password", &ocr, None)
     ///         .await?;
     ///     println!("登录成功: {}", session.student_id());
     ///     Ok(())

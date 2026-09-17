@@ -28,12 +28,14 @@
 //!
 //! ```no_run
 //! use gnnuhub_api::{Client, ClientConfig};
-//! use gnnuhub_ocr::ManualOcr;
+//! use gnnuhub_ocr::FailoverOcr;
 //!
 //! async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = Client::new(ClientConfig::default())?;
+//!     // 推荐组合：位图查表 -> 失败时退回人工输入
+//!     let ocr = FailoverOcr::recommended()?;
 //!     let session = client
-//!         .login(2500000001, "password", &ManualOcr::new(), None)
+//!         .login(2500000001, "password", &ocr, None)
 //!         .await?;
 //!     println!("当前教学周: {:?}", session.this_week().await?);
 //!     Ok(())

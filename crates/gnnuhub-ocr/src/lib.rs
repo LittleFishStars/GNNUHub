@@ -6,18 +6,26 @@
 //! - 固定 **4 个字符**，字母数字混合，**大小写混用**
 //! - 每个字符**颜色随机**且互不相同，白色背景
 //! - **启用抗锯齿**（一个字形约 31 种颜色：1 个实心核心 + 约 30 个过渡色）
-//! - 无旋转、无扭曲、无干扰线；噪点是**独立连通域**，不与字形相连
+//! - 无旋转、无扭曲、无干扰线；实测**没有噪点**（`i`/`j` 的点是独立连通域，
+//!   但那是字形的一部分，必须合并回主干）
 //!
-//! 由于字符颜色随机，识别前必须先做灰度化丢弃颜色信息。
+//! 由于字符颜色随机，识别前必须先丢弃颜色信息。
+//!
+//! 更进一步：**字形渲染是确定性的** —— 同一 (字符, 字号) 组合在不同图片、
+//! 不同颜色下产生逐像素相同的点阵。因此识别可以退化为位图查表，
+//! 准确率上限只取决于字库覆盖度。详见 [`bitmap`] 模块。
 //!
 //! # 可插拔设计
 //!
 //! 识别器通过 [`OcrEngine`] trait 抽象，上层登录逻辑只依赖该 trait，
 //! 因此可以自由替换实现：
 //!
-//! - [`ManualOcr`]：不做识别，把图片交给调用方人工输入（默认实现）
-//! - [`FailoverOcr`]：把任意自动识别器包一层，失败时自动退回人工输入
-//! - `TesseractOcr`（feature `tesseract`）：调用外部 tesseract 识别
+//! - [`BitmapOcr`]：**推荐**。位图查表，在字库覆盖范围内接近 100%
+//! - [`ManualOcr`]：不做识别，把图片交给调用方人工输入
+//! - [`FailoverOcr`]：包一层自动回退到人工输入；
+//!   [`FailoverOcr::recommended`] 给出推荐的默认组合
+//! - `TesseractOcr`（feature `tesseract`）：调用外部 tesseract，
+//!   作为字库缺条目时的兜底
 //! - 云打码服务：网络调用第三方识别接口
 //!
 //! # 示例
@@ -48,9 +56,7 @@ use image::DynamicImage;
 
 pub mod bitmap;
 
-pub use bitmap::{
-    BitmapLibrary, BitmapOcr, EMBEDDED_LIBRARY_JSON, GlyphEntry, embedded_library,
-};
+pub use bitmap::{BitmapLibrary, BitmapOcr, EMBEDDED_LIBRARY_JSON, GlyphEntry, embedded_library};
 
 #[cfg(feature = "tesseract")]
 pub mod tesseract;
@@ -200,6 +206,70 @@ impl FailoverOcr {
     /// 用给定的主识别器与人工兜底构造
     pub fn new(primary: Box<dyn OcrEngine>, fallback: ManualOcr) -> Self {
         Self { primary, fallback }
+    }
+
+    /// 构造推荐的识别链：位图查表 -> 人工输入
+    ///
+    /// 位图查表基于「服务端字形渲染是确定性的」这一事实，在字库覆盖到的
+    /// 范围内接近 100%，因此作为首选。未能命中时退回人工输入。
+    ///
+    /// 若启用了 `tesseract` feature，可改用 `recommended_with_tesseract`
+    /// 在两者之间再加一层。
+    pub fn recommended() -> Result<Self> {
+        let primary: Box<dyn OcrEngine> = Box::new(BitmapOcr::embedded()?);
+        Ok(Self::new(primary, ManualOcr::new()))
+    }
+
+    /// 在推荐链的基础上再插入 tesseract 兜底：位图 -> tesseract -> 人工
+    ///
+    /// 位图查表命中率远高于 tesseract，但字库是采样得来的、可能缺条目；
+    /// tesseract 作为通用 OCR 能覆盖字库缺失的情形。
+    #[cfg(feature = "tesseract")]
+    pub fn recommended_with_tesseract() -> Result<Self> {
+        let auto: Box<dyn OcrEngine> = Box::new(tesseract::TesseractOcr::new());
+        let chained = Self::new(auto, ManualOcr::new());
+        let primary: Box<dyn OcrEngine> = Box::new(BitmapOcr::embedded()?);
+        Ok(Self::new(primary, ManualOcr::new()).with_chain(chained))
+    }
+
+    /// 内部用：把「位图 -> 次级自动 -> 人工」串起来
+    #[cfg(feature = "tesseract")]
+    fn with_chain(self, inner: Self) -> Self {
+        Self {
+            primary: Box::new(ChainOcr {
+                first: self.primary,
+                second: Box::new(inner),
+            }),
+            fallback: self.fallback,
+        }
+    }
+}
+
+/// 顺序尝试两个识别器，前者失败时用后者
+#[cfg(feature = "tesseract")]
+struct ChainOcr {
+    first: Box<dyn OcrEngine>,
+    second: Box<dyn OcrEngine>,
+}
+
+#[cfg(feature = "tesseract")]
+impl OcrEngine for ChainOcr {
+    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
+        match self.first.recognize(image_base64, interactive) {
+            Ok(code) => Ok(code),
+            Err(e) => {
+                tracing::debug!(
+                    "{} 失败（{e}），改用 {}",
+                    self.first.name(),
+                    self.second.name()
+                );
+                self.second.recognize(image_base64, interactive)
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "chain"
     }
 }
 
@@ -443,5 +513,39 @@ mod tests {
     fn failover_name_is_stable() {
         let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
         assert_eq!(engine.name(), "failover");
+    }
+
+    /// 推荐链应能构造，并在自动识别失败时退回人工输入
+    #[test]
+    fn recommended_falls_back_to_manual() {
+        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
+        // 传一张无法识别的垃圾图，应走到人工输入分支
+        let cb: &InteractiveFn = &|_img: &str| Ok(Some("aB3d".to_string()));
+        let got = engine
+            .recognize("data:image/png;base64,iVBORw0KGgo=", Some(cb))
+            .expect("应退回人工并成功");
+        assert_eq!(got, "aB3d");
+    }
+
+    /// 推荐链在无交互回调时应报「需要人工输入」而不是崩溃
+    #[test]
+    fn recommended_without_callback_errors_cleanly() {
+        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
+        let err = engine
+            .recognize("data:image/png;base64,iVBORw0KGgo=", None)
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::CaptchaRequiresManualInput),
+            "应报需要人工输入，实际: {err:?}"
+        );
+    }
+
+    /// 推荐链的主识别器应是位图查表
+    #[cfg(not(feature = "tesseract"))]
+    #[test]
+    fn recommended_uses_bitmap_as_primary() {
+        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
+        let dbg = format!("{engine:?}");
+        assert!(dbg.contains("bitmap"), "主识别器应为 bitmap，实际: {dbg}");
     }
 }
