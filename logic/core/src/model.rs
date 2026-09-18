@@ -499,6 +499,59 @@ pub struct Document {
     pub number: String,
 }
 
+/// 一条考试安排记录
+///
+/// 字段与考试查询页前端的 `colModel`（`cxXsksxxIndex.js` 学生分支，
+/// 学校码 `10418` 通用分支）对齐，2026-09 实测 8 条真实记录验证。
+///
+/// [`Self::exam_time`] 保留接口原文（形如
+/// `"2026-07-07(14:30-16:30)"`）：展示已经足够，拆分日期与起止
+/// 时间的规则留给需要精确时间的上层。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExamRecord {
+    /// 课程代码
+    pub course_code: String,
+    /// 课程名称
+    pub course_name: String,
+    /// 考试批次名称，例如「2025-2026-2学期期末考试（统一蓉江）」
+    pub exam_name: String,
+    /// 考试时间（接口原文），例如 `"2026-07-07(14:30-16:30)"`
+    pub exam_time: String,
+    /// 考试地点（教室，例如 `"2-309"`）
+    pub location: String,
+    /// 考试校区
+    pub campus: String,
+    /// 考试方式（笔试 / 机考等）
+    pub exam_mode: String,
+    /// 考核方式（考试 / 考查）
+    pub assessment: String,
+    /// 开课学院
+    pub college: String,
+    /// 任课教师（接口原文，形如 `"工号/姓名"`）
+    pub teacher: String,
+    /// 是否补考（接口原文「是 / 否」）
+    pub make_up: String,
+    /// 教学班
+    pub class_name: String,
+    /// 学分
+    pub credit: f32,
+    /// 学年（原文，例如 `"2025-2026"`）
+    pub academic_year: String,
+    /// 学期（原文，例如 `"2"`）
+    pub semester: String,
+    /// 该课程的上课时间（排课原文，来自 `sksj` 字段）
+    pub class_time: String,
+    /// 考试时长（分钟；`sjsj` 缺失或非法时为 `None`）
+    pub duration_minutes: Option<u32>,
+}
+
+impl ExamRecord {
+    /// 是否为补考场次
+    pub fn is_make_up(&self) -> bool {
+        self.make_up.contains("是")
+    }
+}
+
 /// 一天中的节次时间（第一节几点开始、第几节几点结束）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeriodTime {

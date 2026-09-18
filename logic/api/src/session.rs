@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use gnnuhub_core::model::{AcademicTerm, ClassSchedule, PeriodTime, StudentInfo};
+use gnnuhub_core::model::{AcademicTerm, ClassSchedule, ExamRecord, PeriodTime, StudentInfo};
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
 use crate::client::Client;
@@ -27,6 +27,8 @@ struct SessionState {
     info: StudentInfo,
     /// 按学年学期缓存的课表
     schedules: HashMap<AcademicTerm, ClassSchedule>,
+    /// 按学年学期缓存的考试安排
+    exams: HashMap<AcademicTerm, Vec<ExamRecord>>,
     /// 节次时间表
     timetable: Option<Vec<PeriodTime>>,
     /// 当前教学周
@@ -354,6 +356,57 @@ impl Session {
         let mut state = self.state.lock().await;
         state.timetable = Some(times.clone());
         Ok(times)
+    }
+
+    /// 拉取考试安排
+    ///
+    /// 对应教务系统「考试信息查询」（模块码 `N358105`），2026-09
+    /// 实测 8 条真实记录验证。
+    ///
+    /// # 接口形状（离线逆向 `cxXsksxxIndex.js` + 实测）
+    ///
+    /// - 数据接口 = 菜单页面本身 + `doType=query`（jqGrid 数据源）；
+    /// - 表单来自学生分支的 `paramMap()`（`ksmcdmb_id`/`kch`/`kc`/
+    ///   `ksrq`/`kkbm_id` 均为可选过滤条件，留空 = 不筛选），外加
+    ///   框架注入的 `zd_fzdm=N358105-xs`（学生侧标记，与成绩接口
+    ///   的 `remoteParams` 机制同构）；
+    /// - 实测服务端**不按 `xnm`/`xqm` 过滤**，返回学生的全部考试
+    ///   记录（未安排考试的学期自然为空）。学期参数仍按浏览器形状
+    ///   照发，缓存按学期分桶以保持接口语义。
+    pub async fn exam_schedule(&self, term: AcademicTerm) -> Result<Vec<ExamRecord>> {
+        {
+            let state = self.state.lock().await;
+            if let Some(cached) = state.exams.get(&term) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let year_str = term.as_xnm();
+        let xqm_str = term.as_xqm().to_string();
+        let form = [
+            ("xnm", year_str.as_str()),
+            ("xqm", xqm_str.as_str()),
+            ("ksmcdmb_id", ""),
+            ("kch", ""),
+            ("kc", ""),
+            ("ksrq", ""),
+            ("kkbm_id", ""),
+            ("zd_fzdm", "N358105-xs"),
+            ("queryModel.showCount", "100"),
+        ];
+
+        let body = self
+            .post_form(
+                "/kwgl/kscx_cxXsksxxIndex.html",
+                &[("gnmkdm", "N358105"), ("doType", "query")],
+                &form,
+            )
+            .await?;
+
+        let exams = parse::parse_exams(&body)?;
+        let mut state = self.state.lock().await;
+        state.exams.insert(term, exams.clone());
+        Ok(exams)
     }
 
     /// 获取当前教学周

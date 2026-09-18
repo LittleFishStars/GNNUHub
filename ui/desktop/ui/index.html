@@ -36,6 +36,7 @@
       <div class="brand">GNNUHub</div>
       <nav class="tabs">
         <button data-tab="schedule" class="tab active">课表</button>
+        <button data-tab="exams" class="tab">考试</button>
         <button data-tab="profile" class="tab">学籍</button>
         <button data-tab="grades" class="tab" disabled
                 title="成绩接口尚未实测可用">成绩</button>
@@ -70,6 +71,27 @@
         <button id="btn-load-schedule" class="primary small">查询</button>
       </div>
       <div id="schedule-grid" class="grid"></div>
+    </div>
+
+    <!-- 考试 -->
+    <div id="tab-exams" class="tab-panel hidden">
+      <div class="controls">
+        <label>学年
+          <select id="sel-exam-year">
+            <option value="2024">2024-2025</option>
+            <option value="2025">2025-2026</option>
+            <option value="2026" selected>2026-2027</option>
+          </select>
+        </label>
+        <label>学期
+          <select id="sel-exam-term">
+            <option value="1" selected>第一学期</option>
+            <option value="2">第二学期</option>
+          </select>
+        </label>
+        <button id="btn-load-exams" class="primary small">查询</button>
+      </div>
+      <div id="exam-list"></div>
     </div>
 
     <!-- 学籍 -->

@@ -226,6 +226,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   padding: 30px 0;
 }
 
+/* ---------- 考试安排 ---------- */
+
+.exam-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.exam-table th,
+.exam-table td {
+  padding: 9px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.exam-table th {
+  background: rgba(28, 84, 158, 0.07);
+  color: var(--primary-dark);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.exam-table tbody tr:hover { background: rgba(28, 84, 158, 0.04); }
+
+.exam-table .sub { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+
+.exam-table tr.makeup td { color: var(--error); }
+
 /* ---------- 学籍 ---------- */
 
 .cards {

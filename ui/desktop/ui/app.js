@@ -131,6 +131,75 @@ function fillWeekOptions() {
   }
 }
 
+/* ---------- 考试安排 ---------- */
+
+/** 把 "2026-07-07(14:30-16:30)" 拆成日期与时间段（容错：拆不开就整段当日期） */
+function splitExamTime(text) {
+  const m = /^(.*?)\((.*?)\)\s*$/.exec(text || "");
+  if (!m) return [text || "—", ""];
+  return [m[1] || "—", m[2]];
+}
+
+function renderExams(exams) {
+  const wrap = $("exam-list");
+  wrap.innerHTML = "";
+
+  if (!exams.length) {
+    wrap.innerHTML = '<div class="empty-tip">该学期暂无考试安排</div>';
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "exam-table";
+  table.innerHTML =
+    "<thead><tr><th>课程</th><th>考试批次</th><th>日期</th><th>时间</th>" +
+    "<th>地点</th><th>方式</th><th>教师</th><th>补考</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+
+  for (const exam of exams) {
+    const [date, clock] = splitExamTime(exam.exam_time);
+    const tr = document.createElement("tr");
+    if (exam.is_make_up) tr.classList.add("makeup");
+
+    const cells = [
+      [exam.course_name, exam.course_code],
+      [exam.exam_name],
+      [date],
+      [clock],
+      [exam.location, exam.campus],
+      [exam.exam_mode],
+      [(exam.teacher || "").split("/").pop() || exam.teacher],
+      [exam.is_make_up ? "是" : "否"],
+    ];
+    for (const [main, sub] of cells) {
+      const td = document.createElement("td");
+      td.textContent = main || "—";
+      if (sub) {
+        const small = document.createElement("div");
+        small.className = "sub";
+        small.textContent = sub;
+        td.appendChild(small);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+async function loadExams() {
+  const year = Number($("sel-exam-year").value);
+  const term = Number($("sel-exam-term").value);
+
+  await withBusy("查询考试安排", async () => {
+    const exams = await invoke("exam_schedule", { year, term });
+    renderExams(exams);
+    setStatus(`考试安排已更新（${exams.length} 场）`);
+  });
+}
+
 /* ---------- 学籍渲染 ---------- */
 
 const PROFILE_FIELDS = [
@@ -246,6 +315,8 @@ $("in-password").addEventListener("keydown", (ev) => {
 
 $("btn-load-schedule").addEventListener("click", () => loadSchedule().catch(() => {}));
 
+$("btn-load-exams").addEventListener("click", () => loadExams().catch(() => {}));
+
 $("btn-this-week").addEventListener("click", async () => {
   try {
     const week = await invoke("this_week");
@@ -272,6 +343,9 @@ document.querySelectorAll(".tab").forEach((btn) => {
 
     if (btn.dataset.tab === "profile" && !$("profile-cards").childElementCount) {
       loadProfile().catch(() => {});
+    }
+    if (btn.dataset.tab === "exams" && !$("exam-list").childElementCount) {
+      loadExams().catch(() => {});
     }
   });
 });

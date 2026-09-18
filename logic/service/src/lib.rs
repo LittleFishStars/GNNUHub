@@ -186,6 +186,17 @@ impl HubService {
     pub async fn this_week(&self) -> std::result::Result<u8, ServiceError> {
         Ok(self.active_session().await?.this_week().await?)
     }
+
+    /// 获取考试安排
+    ///
+    /// 实测服务端不按学期过滤、返回学生全部考试记录；学期参数仅作
+    /// 为缓存分桶的键（见 [`gnnuhub_api::Session::exam_schedule`]）。
+    pub async fn exam_schedule(
+        &self,
+        term: AcademicTerm,
+    ) -> std::result::Result<Vec<model::ExamRecord>, ServiceError> {
+        Ok(self.active_session().await?.exam_schedule(term).await?)
+    }
 }
 
 #[cfg(test)]
