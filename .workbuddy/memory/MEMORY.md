@@ -146,26 +146,28 @@
   `xjztdm`、学制 `xz`、生源地 `syd`、入学总分 `rxzf` 等字段；
   `zyh_id` 是干净专业名免剥后缀。`fetch_student_info` 走它，
   失败回退 HTML。
-- **🔴 课表接口 null 的根因（2026-09-18 晚定性，14 组实验）**：
-  **WAF 用 TLS 指纹校验区分真实浏览器与程序化客户端**。证据链：
-  浏览器 200+18 条课表；程序任意形状（Chrome/Firefox UA、任意头
-  组合、Sec-Fetch、会话上下文）恒定 null；**借用浏览器会话 Cookie
-  立即被拦 HTTP 901**（WAF 拦截码，会话-指纹绑定校验）；Firefox
-  UA 全新会话仍 null（排除应用层）。reqwest/rustls 的 TLS 握手
-  指纹与浏览器不同，**应用层无法绕过**。课表/移动端课表接口启用
-  了校验，学籍/考试接口未启用。上午成功系 WAF 规则上线前窗口期
-  （当日部署更新 3 次，ver 29769310→316）。**修复选项**：
-  a) 换 impersonate 类客户端（rquest / reqwest-impersonate，需
-     BoringSSL 工具链）；b) 等 WAF 策略变化。补充：client.rs 已
-     补 Sec-Fetch 三件套默认头。探针：probe_kb_null（A-M）、
-     probe_kb_ua（N）。
+- **🔴✅ 课表接口 null 的真正根因（2026-09-19 定性，此前「WAF
+  TLS 指纹黑名单」等结论全部错误并已更正）**：`Session::send`
+  写死 `http.get(url)`——**所有 POST 表单实际发的是 GET+body**！
+  课表接口只认 POST → null；学籍/考试等接口因 Servlet 容器兼容
+  GET+form-body 一直未暴露。修复 = send() 尊重调用方
+  reqwest::Method（commit e37423e），实测 kbList=18 ✅。
+  **方法论教训**：14 组「形状实验」共享同一条发送路径，被单一
+  混杂变量污染；「借用浏览器 Cookie 被 901 拦截」是指纹突变所致，
+  与课表问题无关。**对照实验必须先验证已知成功基底（Python 版）
+  在当前时点仍成功**。
+  **推论：移动端课表接口 `xskbcxMobile_cxXsKb`「失效」的判断
+  存疑**（当年实验同样走 GET），需要按周远程查询时用 POST 重验。
+  HTTP 栈最终形态：reqwest + native-tls（系统 OpenSSL，与 Python
+  参考实现对齐）；wreq/BoringSSL 浏览器仿真系基于错误根因的尝试，
+  已回退（编译重且非必需）。UA 用诚实标识 `gnnuhub/<版本>`
+  （实验证明 UA/头组合完全无关）。
 - **（历史）课表接口 2026-09-18 下午起恒定返回 null**：
   `xskbcx_cxXsgrkb.html` 对所有学期、所有形状（A-J 十组对照实验）
   恒定 `null`，同日早些同形状实测成功过 9 门课；前端 JS 对
-  `data==null` 有显式处理（浏览器也显示空课表）。**修正早前判断：
-  移动端接口 `xskbcxMobile_cxXsKb` 的 null 并非单独失效，两者症状
-  一致，疑似学校端课表数据服务变更/故障**。代码已优雅降级
-  （parse 把 null → 空课表）。恢复后无需改代码。探针：
+  `data==null` 有显式处理（浏览器也显示空课表）。**「学校端课表服务变更/故障」的判断
+  已被推翻（真因是 GET 方法 bug，见上）**。代码已优雅降级
+  （parse 把 null → 空课表）。探针：
   `cargo run --release -p gnnuhub-api --example probe_kb_null`。
   单周课表 = `ClassSchedule::week_view(w)` 客户端过滤；周次解析
   支持 `1-18周` / `7-13周(单)` / 多段逗号，不可解析保守返回 true。
