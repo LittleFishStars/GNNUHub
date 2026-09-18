@@ -5,6 +5,7 @@ members = [
     "crates/gnnuhub-crypto",
     "crates/gnnuhub-ocr",
     "crates/gnnuhub-api",
+    "crates/gnnuhub-app",
 ]
 
 [workspace.package]
@@ -68,6 +69,12 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # 随机数
 rand = "0.9"
+
+# 桌面界面（Tauri 2）
+#
+# Linux 侧系统依赖：webkit2gtk-4.1、gtk3（Arch 包名 webkit2gtk-4.1、gtk3）。
+tauri = "2"
+tauri-build = "2"
 
 [profile.release]
 lto = "thin"

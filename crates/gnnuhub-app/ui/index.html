@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GNNUHub · 赣南师范大学教务助手</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- 登录视图 -->
+  <section id="view-login" class="view">
+    <div class="login-card">
+      <div class="logo">G</div>
+      <h1>GNNUHub</h1>
+      <p class="subtitle">赣南师范大学教务助手</p>
+
+      <label>学号
+        <input id="in-student-id" type="text" inputmode="numeric"
+               placeholder="例如 250710078" autocomplete="username">
+      </label>
+      <label>密码
+        <input id="in-password" type="password"
+               autocomplete="current-password">
+      </label>
+
+      <p class="hint">验证码由内嵌字库自动识别；密码仅用于本次登录，不保存、不上传。</p>
+      <button id="btn-login" class="primary">登 录</button>
+      <div id="login-error" class="error hidden"></div>
+    </div>
+  </section>
+
+  <!-- 主视图 -->
+  <section id="view-main" class="view hidden">
+    <header class="topbar">
+      <div class="brand">GNNUHub</div>
+      <nav class="tabs">
+        <button data-tab="schedule" class="tab active">课表</button>
+        <button data-tab="profile" class="tab">学籍</button>
+        <button data-tab="grades" class="tab" disabled
+                title="成绩接口尚未实测可用">成绩</button>
+      </nav>
+      <div class="spacer"></div>
+      <div id="user-badge" class="badge"></div>
+      <button id="btn-logout" class="ghost">退出登录</button>
+    </header>
+
+    <!-- 课表 -->
+    <div id="tab-schedule" class="tab-panel">
+      <div class="controls">
+        <label>学年
+          <select id="sel-year">
+            <option value="2024">2024-2025</option>
+            <option value="2025">2025-2026</option>
+            <option value="2026" selected>2026-2027</option>
+          </select>
+        </label>
+        <label>学期
+          <select id="sel-term">
+            <option value="1" selected>第一学期</option>
+            <option value="2">第二学期</option>
+          </select>
+        </label>
+        <label>周次
+          <select id="sel-week">
+            <option value="0" selected>整学期</option>
+          </select>
+        </label>
+        <button id="btn-this-week" class="ghost">当前周</button>
+        <button id="btn-load-schedule" class="primary small">查询</button>
+      </div>
+      <div id="schedule-grid" class="grid"></div>
+    </div>
+
+    <!-- 学籍 -->
+    <div id="tab-profile" class="tab-panel hidden">
+      <div id="profile-cards" class="cards"></div>
+    </div>
+
+    <!-- 成绩（占位） -->
+    <div id="tab-grades" class="tab-panel hidden">
+      <div class="placeholder">
+        <h2>成绩查询暂未开放</h2>
+        <p>成绩接口对当前测试账号恒定返回空信封，无法完成实测验证。
+           按项目纪律「无法实测的接口不转正」，该功能将在换用有成绩的
+           账号验证探针结果后开放。</p>
+      </div>
+    </div>
+
+    <footer class="statusbar">
+      <span id="status-text">就绪</span>
+    </footer>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
