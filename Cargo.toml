@@ -36,14 +36,18 @@ serde_json = "1"
 
 # 异步运行时与 HTTP
 #
-# HTTP 客户端用 wreq（reqwest 的指纹伪装分支）：学校 WAF 自
-# 2026-09-18 起对课表等敏感接口做 TLS 指纹校验（JA3/JA4 类），
-# rustls/reqwest 的握手指纹会被识别并静默返回 null。wreq 可完整
-# 模拟浏览器的 TLS + HTTP/2 指纹（BoringSSL）。
-# 注意：需要 cmake + clang 工具链，首次编译明显变慢。
+# ⚠️ TLS 后端是功能性选择，不是实现细节（2026-09-19 定性）：
+# 学校 WAF 按客户端 TLS 指纹白名单放行课表等敏感接口——
+# OpenSSL（python-requests 同库）与真实浏览器放行，rustls 与
+# BoringSSL（btls）的指纹一律静默返回 null（爬虫黑名单）。
+# 因此必须使用 native-tls（系统 OpenSSL），禁用 rustls-tls。
+# 实验记录见 probe_kb_null.rs / probe_kb_ua.rs 与当日工作日志。
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-wreq = { version = "6.0.0-rc", features = ["form", "query", "json", "gzip", "charset"] }
-wreq-util = "3.0.0-rc"
+reqwest = { version = "0.12", default-features = false, features = [
+    "native-tls",
+    "json",
+    "gzip",
+] }
 
 # 大数运算（RSA）
 num-bigint = "0.4"

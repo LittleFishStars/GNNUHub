@@ -1,10 +1,11 @@
-//! 课表接口复验探针：登录后直接请求课表，验证浏览器仿真是否生效
+//! 课表接口复验探针：登录后直接请求课表
 //!
 //! # 背景
 //!
-//! 根因已定性（见 probe_kb_null.rs）：学校 WAF 对课表接口做 TLS
-//! 指纹校验。HTTP 栈换用 wreq（浏览器仿真，Chrome 档案）后，本探针
-//! 用于确认课表数据可正常获取。
+//! 历史上多个假设（WAF TLS 指纹、浏览器仿真等）均被证伪，最终根因
+//! 是 `Session::send` 写死 GET 方法（课表接口只认 POST，见
+//! `probe_kb_null.rs` 结尾的更正记录）。本探针保留为课表接口的
+//! 快速复验工具。
 //!
 //! 请求预算：登录 ~5 + POST 1 = 6。
 
@@ -61,6 +62,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("    登录成功: {}\n", session.student_id());
 
+    // 把本会话 Cookie 落盘，供 Python 侧对照实验使用
+    let cookies: serde_json::Map<String, serde_json::Value> = session
+        .cookies()
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    let _ = std::fs::write(
+        ".scratch/rust_session_cookies.json",
+        serde_json::to_string_pretty(&cookies)?,
+    );
+    println!("    Cookie 已写入 .scratch/rust_session_cookies.json\n");
+
     let form = [
         ("xnm", "2026"),
         ("xqm", "3"),
@@ -85,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[N] → kbList={n:?}（{} 字节）", t.len());
         if n.unwrap_or(0) > 0 {
             let _ = std::fs::write("tools/js-recon/out/pages/kb_verify.json", t);
-            println!("    ✅✅ 根因确认为 UA 指纹：换 Firefox UA 即可修复");
+            println!("    ✅ 课表接口正常");
         }
     } else {
         println!(

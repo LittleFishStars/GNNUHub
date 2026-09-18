@@ -10,7 +10,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// 网络请求失败（DNS、连接、超时等）
     #[error("网络请求失败: {0}")]
-    Network(#[from] wreq::Error),
+    Network(#[from] reqwest::Error),
 
     /// 服务端返回了非预期状态码
     #[error("服务端返回异常状态码 {status}: {url}")]

@@ -11,8 +11,8 @@
 
 use std::collections::HashMap;
 
+use reqwest::header::LOCATION;
 use serde::Deserialize;
-use wreq::header::LOCATION;
 
 use gnnuhub_core::{CAS_BASE_URL, Error, JWGL_BASE_URL, Result};
 use gnnuhub_ocr::OcrEngine;
@@ -351,7 +351,7 @@ pub async fn exchange_ticket_for_session(
             carry.keys().collect::<Vec<_>>(),
             response
                 .headers()
-                .get_all(wreq::header::SET_COOKIE)
+                .get_all(reqwest::header::SET_COOKIE)
                 .iter()
                 .filter_map(|v| v.to_str().ok())
                 .map(|s| s.split(';').next().unwrap_or("").to_string())
@@ -447,7 +447,7 @@ async fn send_with_retry(
     url: &str,
     cookies: &HashMap<String, String>,
     hop: u32,
-) -> Result<wreq::Response> {
+) -> Result<reqwest::Response> {
     /// 单跳最多尝试次数
     const MAX_ATTEMPTS: u32 = 3;
     /// 重试前的等待时间
@@ -461,7 +461,10 @@ async fn send_with_retry(
     let mut last_err = None;
     for attempt in 1..=MAX_ATTEMPTS {
         let result = client
-            .throttled(|http| http.get(url).header(wreq::header::COOKIE, &cookie_header))
+            .throttled(|http| {
+                http.get(url)
+                    .header(reqwest::header::COOKIE, &cookie_header)
+            })
             .await;
 
         match result {
@@ -497,11 +500,11 @@ async fn send_with_retry(
 ///   （第 2 跳请求 `/sso/lyiotlogin`）是**必须携带**的
 /// - 同时把 `/sso` 作用域的值记入 `sso_scoped`，供调用方在链路结束后剔除
 fn collect_set_cookies(
-    response: &wreq::Response,
+    response: &reqwest::Response,
     out: &mut HashMap<String, String>,
     sso_scoped: &mut Option<String>,
 ) {
-    for value in response.headers().get_all(wreq::header::SET_COOKIE) {
+    for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
         let Ok(text) = value.to_str() else { continue };
         let Some((name, val)) = parse_set_cookie(text) else {
             continue;

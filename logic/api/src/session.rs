@@ -69,6 +69,13 @@ impl Session {
         &self.student_id
     }
 
+    /// 当前会话的 Cookie（只读快照）
+    ///
+    /// 主要供诊断工具对比「同一 Cookie 在不同客户端下的行为」使用。
+    pub fn cookies(&self) -> &HashMap<String, String> {
+        &self.cookies
+    }
+
     /// 构造带 Cookie 的请求头
     fn cookie_header(&self) -> String {
         crate::login::build_cookie_header(&self.cookies)
@@ -81,14 +88,21 @@ impl Session {
     ///
     /// `build` 在拿到 `RequestBuilder` 后继续追加方法特有的内容
     /// （查询串、表单体等），因此三种请求形态共用同一条路径。
-    async fn send<F>(&self, url: &str, build: F) -> Result<String>
+    ///
+    /// `method` 必须由调用方如实指定：教务系统各接口对 HTTP 方法
+    /// 的兼容性不一致（课表接口只认 POST——2026-09-19 定性，此前
+    /// 本方法写死 GET 导致课表恒定返回 null，而学籍/考试等接口
+    /// 因容器兼容 GET+body 一直未暴露）。
+    async fn send<F>(&self, method: reqwest::Method, url: &str, build: F) -> Result<String>
     where
-        F: FnOnce(wreq::RequestBuilder) -> wreq::RequestBuilder,
+        F: FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     {
         let cookie = self.cookie_header();
         let response = self
             .client
-            .throttled(|http| build(http.get(url)).header(wreq::header::COOKIE, &cookie))
+            .throttled(|http| {
+                build(http.request(method, url)).header(reqwest::header::COOKIE, &cookie)
+            })
             .await?;
 
         let status = response.status();
@@ -120,13 +134,14 @@ impl Session {
     /// 请求仍然经过客户端节流，避免触发网关风控。
     pub async fn fetch_raw(&self, path: &str) -> Result<String> {
         let url = Self::absolute_url(path);
-        self.send(&url, |req| req).await
+        self.send(reqwest::Method::GET, &url, |req| req).await
     }
 
     /// 发起一个带会话 Cookie 的 GET 请求
     async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
-        self.send(&url, |req| req.query(query)).await
+        self.send(reqwest::Method::GET, &url, |req| req.query(query))
+            .await
     }
 
     /// 发起一个带会话 Cookie 的 POST 请求（表单）
@@ -137,7 +152,10 @@ impl Session {
         form: &[(&str, &str)],
     ) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
-        self.send(&url, |req| req.query(query).form(form)).await
+        self.send(reqwest::Method::POST, &url, |req| {
+            req.query(query).form(form)
+        })
+        .await
     }
 
     /// 原样发一次表单 POST（可附自定义请求头），供接口探测工具使用
@@ -165,7 +183,7 @@ impl Session {
         headers: &[(&str, &str)],
     ) -> Result<String> {
         let url = format!("{JWGL_BASE_URL}{path}");
-        self.send(&url, |req| {
+        self.send(reqwest::Method::POST, &url, |req| {
             let mut req = req.query(query).form(form);
             for (name, value) in headers {
                 req = req.header(*name, *value);
