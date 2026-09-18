@@ -300,3 +300,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .statusbar.error { color: var(--error); }
+
+/* 面板内错误提示（比底部状态栏醒目） */
+.error-tip {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #fdecea;
+  border: 1px solid #f5c6c0;
+  color: var(--error);
+  font-size: 13px;
+}

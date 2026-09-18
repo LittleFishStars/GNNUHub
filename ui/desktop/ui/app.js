@@ -19,19 +19,47 @@ function showError(id, message) {
   el.classList.remove("hidden");
 }
 
-/** 给"查询中"按钮上锁，防止重复点击重复打接口 */
-let busy = false;
+/**
+ * 包一层"状态栏提示 + 错误上浮"。
+ *
+ * 注意：这里**没有全局互斥锁**——登录后会并发拉学籍与课表，
+ * 之前的布尔锁会把后到的调用静默丢弃（表现为登录后课表空白、
+ * 点查询前毫无动静）。防重复点击由各按钮自行 disabled。
+ */
 async function withBusy(label, fn) {
-  if (busy) return;
-  busy = true;
   setStatus(label + "…");
   try {
     return await fn();
   } catch (e) {
     setStatus(String(e), true);
     throw e;
+  }
+}
+
+/** 把错误显示到某个面板区域内，比底部状态栏醒目得多 */
+function showPanelError(panelId, message) {
+  const panel = $(panelId);
+  let tip = panel.querySelector(".error-tip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "error-tip";
+    panel.prepend(tip);
+  }
+  tip.textContent = "加载失败：" + message;
+}
+
+function clearPanelError(panelId) {
+  document.getElementById(panelId)?.querySelectorAll(".error-tip").forEach((t) => t.remove());
+}
+
+/** 执行期间禁用按钮，防止重复点击重复打接口 */
+async function withButton(btn, fn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    return await fn();
   } finally {
-    busy = false;
+    btn.disabled = false;
   }
 }
 
@@ -194,6 +222,7 @@ async function loadExams() {
   const term = Number($("sel-exam-term").value);
 
   await withBusy("查询考试安排", async () => {
+    clearPanelError("tab-exams");
     const exams = await invoke("exam_schedule", { year, term });
     renderExams(exams);
     setStatus(`考试安排已更新（${exams.length} 场）`);
@@ -261,6 +290,7 @@ function showLogin() {
 
 async function loadProfile() {
   await withBusy("加载学籍信息", async () => {
+    clearPanelError("tab-profile");
     renderProfile(await invoke("student_info"));
     setStatus("学籍信息已加载");
   });
@@ -272,6 +302,7 @@ async function loadSchedule() {
   const week = Number($("sel-week").value);
 
   await withBusy(week ? "查询第 " + week + " 周课表" : "查询整学期课表", async () => {
+    clearPanelError("tab-schedule");
     const schedule = await invoke("class_schedule", {
       year, term,
       week: week > 0 ? week : null, // null → 后端 None = 整学期
@@ -299,7 +330,10 @@ $("btn-login").addEventListener("click", async () => {
     const id = await invoke("login", { studentId, password });
     showMain(id);
     setStatus("登录成功，正在拉取信息…");
-    await Promise.allSettled([loadProfile(), loadSchedule()]);
+    // 串行加载：课表依赖的请求节流在同一个客户端上，串行更符合
+    // "一次只做一件事"的 WAF 礼仪；错误就地显示在各自面板里
+    await loadProfile().catch((e) => showPanelError("tab-profile", String(e)));
+    await loadSchedule().catch((e) => showPanelError("tab-schedule", String(e)));
     setStatus("就绪");
   } catch (e) {
     showError("login-error", String(e));
@@ -313,9 +347,11 @@ $("in-password").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") $("btn-login").click();
 });
 
-$("btn-load-schedule").addEventListener("click", () => loadSchedule().catch(() => {}));
+$("btn-load-schedule").addEventListener("click", (ev) =>
+    withButton(ev.currentTarget, () => loadSchedule()).catch(() => {}));
 
-$("btn-load-exams").addEventListener("click", () => loadExams().catch(() => {}));
+$("btn-load-exams").addEventListener("click", (ev) =>
+    withButton(ev.currentTarget, () => loadExams()).catch(() => {}));
 
 $("btn-this-week").addEventListener("click", async () => {
   try {
@@ -353,3 +389,11 @@ document.querySelectorAll(".tab").forEach((btn) => {
 /* ---------- 初始化 ---------- */
 
 fillWeekOptions();
+
+// 兜底诊断：任何未捕获的错误都要可见，而不是"按了没反应"
+window.addEventListener("unhandledrejection", (ev) => {
+  setStatus("未处理的错误：" + (ev.reason?.message ?? ev.reason), true);
+});
+window.addEventListener("error", (ev) => {
+  setStatus("脚本错误：" + ev.message, true);
+});
