@@ -1,24 +1,17 @@
-//! [N] 实验：UA 与会话指纹一致性
+//! 课表接口复验探针：登录后直接请求课表，验证浏览器仿真是否生效
 //!
 //! # 背景
 //!
-//! M 实验发现：用户浏览器会话的 Cookie 由本探针（Chrome UA）使用时
-//! 立即被 WAF 以非标准状态码 901 拦截——WAF 在做**会话与客户端指纹
-//! 绑定校验**。由此推论：程序化登录（Chrome/120 伪装 UA）建立的
-//! 会话，可能因 UA/TLS 指纹评分不足，在敏感接口（课表）被静默拦截。
-//!
-//! 本实验用**完整 Firefox UA** 重新登录并请求课表：
-//! - 若拿到课表 → 根因是 UA 指纹（修复 = 换 UA）；
-//! - 若仍 null → 根因更可能在 TLS 指纹层（需 impersonate 类客户端）。
+//! 根因已定性（见 probe_kb_null.rs）：学校 WAF 对课表接口做 TLS
+//! 指纹校验。HTTP 栈换用 wreq（浏览器仿真，Chrome 档案）后，本探针
+//! 用于确认课表数据可正常获取。
 //!
 //! 请求预算：登录 ~5 + POST 1 = 6。
 
-use gnnuhub_api::{Client, ClientConfig};
+use gnnuhub_api::Client;
 use gnnuhub_ocr::BitmapOcr;
 
 /// 用户浏览器的完整 UA（HAR 实录）
-const FIREFOX_UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:155.0) Gecko/20100101 Firefox/155.0";
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -32,12 +25,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let student_id: u64 = std::env::var("GNNU_STUDENT_ID")?.parse()?;
     let password = std::env::var("GNNU_PASSWORD")?;
 
-    println!("[N] 用 Firefox UA 登录（与会话指纹一致）...");
-    let config = ClientConfig {
-        user_agent: FIREFOX_UA.to_string(),
-        ..ClientConfig::default()
-    };
-    let client = Client::new(config)?;
+    println!("[N] 登录（wreq 浏览器仿真）...");
+    let client = Client::with_defaults()?;
+
+    // 指纹自检：访问 TLS 指纹检测服务，确认 emulation 生效
+    println!("    检测 TLS 指纹（tls.peet.ws）...");
+    match client
+        .http()
+        .get("https://tls.browserleaks.com/json")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let text = resp.text().await?;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let ja3 = v
+                    .pointer("/ja3_hash")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("?");
+                let ja4 = v.pointer("/ja4").and_then(|x| x.as_str()).unwrap_or("?");
+                let ua = v
+                    .pointer("/akamai_hash")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("?");
+                println!("    JA3={ja3} JA4={ja4} Akamai={ua}");
+            } else {
+                println!("    指纹检测响应异常（{} 字节）", text.len());
+            }
+        }
+        Err(e) => println!("    指纹检测失败（不影响后续实验）: {e}"),
+    }
+
     let session = client
         .login(student_id, &password, &BitmapOcr::embedded()?)
         .await?;
@@ -66,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n = v.get("kbList").and_then(|k| k.as_array()).map(|a| a.len());
         println!("[N] → kbList={n:?}（{} 字节）", t.len());
         if n.unwrap_or(0) > 0 {
-            let _ = std::fs::write("tools/js-recon/out/pages/kb_FIREFOX_UA.json", t);
+            let _ = std::fs::write("tools/js-recon/out/pages/kb_verify.json", t);
             println!("    ✅✅ 根因确认为 UA 指纹：换 Firefox UA 即可修复");
         }
     } else {

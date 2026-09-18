@@ -35,13 +35,15 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # 异步运行时与 HTTP
+#
+# HTTP 客户端用 wreq（reqwest 的指纹伪装分支）：学校 WAF 自
+# 2026-09-18 起对课表等敏感接口做 TLS 指纹校验（JA3/JA4 类），
+# rustls/reqwest 的握手指纹会被识别并静默返回 null。wreq 可完整
+# 模拟浏览器的 TLS + HTTP/2 指纹（BoringSSL）。
+# 注意：需要 cmake + clang 工具链，首次编译明显变慢。
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "json",
-    "cookies",
-    "gzip",
-] }
+wreq = { version = "6.0.0-rc", features = ["form", "query", "json", "gzip", "charset"] }
+wreq-util = "3.0.0-rc"
 
 # 大数运算（RSA）
 num-bigint = "0.4"

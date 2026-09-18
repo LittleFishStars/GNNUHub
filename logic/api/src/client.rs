@@ -2,15 +2,13 @@
 
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use wreq::header::{HeaderMap, HeaderValue};
+use wreq_util::Emulation;
 
 use gnnuhub_core::{CAS_HOST, Error, JWGL_BASE_URL, Result};
 
 /// 默认请求超时
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
-
-/// 默认 User-Agent
-const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /// 默认的相邻请求最小间隔
 ///
@@ -23,8 +21,6 @@ const DEFAULT_REQUEST_INTERVAL: Duration = Duration::from_millis(600);
 pub struct ClientConfig {
     /// 请求超时
     pub timeout: Duration,
-    /// User-Agent
-    pub user_agent: String,
     /// 登录流程最多重试次数（含首次尝试之后的重试）
     ///
     /// Python 版在验证码错误时无限递归、在 SSO 跳转失败时 `while True`，
@@ -42,7 +38,6 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
-            user_agent: DEFAULT_USER_AGENT.to_string(),
             max_login_retries: 5,
             request_interval: DEFAULT_REQUEST_INTERVAL,
         }
@@ -70,9 +65,9 @@ impl ClientConfig {
 }
 
 /// API 客户端，持有复用的 HTTP 连接池与 Cookie 容器
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
-    http: reqwest::Client,
+    http: wreq::Client,
     config: ClientConfig,
     /// 上次发起请求的时刻，用于实现请求节流
     ///
@@ -81,46 +76,38 @@ pub struct Client {
     last_request: std::sync::Arc<tokio::sync::Mutex<Option<std::time::Instant>>>,
 }
 
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // wreq::Client 未实现 Debug，只展示配置
+        f.debug_struct("Client")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Client {
     /// 按配置创建客户端
     ///
+    /// 使用浏览器仿真（Chrome 档案）：TLS + HTTP/2 指纹与配套的
+    /// 默认请求头（UA / Sec-Fetch / Accept-Language 等）一并注入。
+    ///
+    /// # 为什么必须仿真
+    ///
+    /// 学校 WAF 自 2026-09-18 起对课表等敏感接口做 TLS 指纹校验
+    /// （JA3/JA4 类）：reqwest/rustls 的握手指纹会被识别，请求被
+    /// 静默返回 `null`（14 组对照实验定性，见 `probe_kb_null.rs`）。
+    /// 仅在应用层伪装 UA/Sec-Fetch 无法通过——实验证明 TLS 层才是
+    /// 判定依据（借用真实浏览器会话 Cookie 也会被拦，HTTP 901）。
+    ///
     /// # 错误
     ///
-    /// User-Agent 含非法字符或底层 TLS 初始化失败时返回错误。
+    /// 底层 TLS 初始化失败时返回错误。
     pub fn new(config: ClientConfig) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            reqwest::header::USER_AGENT,
-            HeaderValue::from_str(&config.user_agent)
-                .map_err(|e| Error::Config(format!("非法的 User-Agent: {e}")))?,
-        );
-        headers.insert(
-            reqwest::header::ACCEPT_LANGUAGE,
-            HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
-        );
-        // Sec-Fetch 三件套：现代浏览器对所有请求都会携带，而桌面
-        // HTTP 库默认不带。真实抓包对比（2026-09-18 HAR）确认教务
-        // 系统的课表接口会校验这组头——「UA 声称是 Chrome 却没有
-        // Sec-Fetch」的请求被 WAF 识别为伪造并静默返回 null
-        // （学籍/考试等接口规则较松不受影响，因此此前未暴露）。
-        headers.insert(
-            HeaderName::from_static("sec-fetch-dest"),
-            HeaderValue::from_static("empty"),
-        );
-        headers.insert(
-            HeaderName::from_static("sec-fetch-mode"),
-            HeaderValue::from_static("cors"),
-        );
-        headers.insert(
-            HeaderName::from_static("sec-fetch-site"),
-            HeaderValue::from_static("same-origin"),
-        );
-
-        let http = reqwest::Client::builder()
+        let http = wreq::Client::builder()
+            .emulation(Emulation::Chrome147)
             .timeout(config.timeout)
-            .default_headers(headers)
             // 手动管理重定向：SSO 跳转的每一跳都需要检查目标域
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(wreq::redirect::Policy::none())
             // 不启用 cookie_store：本项目的 Cookie 全部显式管理
             //
             // 启用后 jar 会自动注入自己那份，与手动设置的 COOKIE 头叠加，
@@ -146,7 +133,7 @@ impl Client {
     ///
     /// 直接使用它会**绕过请求节流**。需要节流时请走
     /// [`Client::throttled`]。
-    pub fn http(&self) -> &reqwest::Client {
+    pub fn http(&self) -> &wreq::Client {
         &self.http
     }
 
@@ -162,9 +149,9 @@ impl Client {
     ///
     /// 教务系统的 WAF 会因突发请求封禁来源 IP，因此**所有**对校内
     /// 接口的访问都应经由本方法，而不是直接使用 [`Client::http`]。
-    pub async fn throttled<F>(&self, build: F) -> Result<reqwest::Response>
+    pub async fn throttled<F>(&self, build: F) -> Result<wreq::Response>
     where
-        F: FnOnce(&reqwest::Client) -> reqwest::RequestBuilder,
+        F: FnOnce(&wreq::Client) -> wreq::RequestBuilder,
     {
         let mut last = self.last_request.lock().await;
         let interval = self.config.request_interval;
@@ -220,14 +207,14 @@ impl Client {
         }
         headers.insert("loginToken", HeaderValue::from_static("loginToken"));
         headers.insert(
-            reqwest::header::CONTENT_TYPE,
+            wreq::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded;charset=utf-8"),
         );
         if let Ok(host) = HeaderValue::from_str(host) {
-            headers.insert(reqwest::header::HOST, host);
+            headers.insert(wreq::header::HOST, host);
         }
         headers.insert(
-            reqwest::header::CONNECTION,
+            wreq::header::CONNECTION,
             HeaderValue::from_static("keep-alive"),
         );
         headers
@@ -370,8 +357,8 @@ mod tests {
         assert!(headers.contains_key("X-Requested-With"));
         assert!(headers.contains_key("loginUserToken"));
         assert!(headers.contains_key("loginToken"));
-        assert!(headers.contains_key(reqwest::header::CONTENT_TYPE));
-        assert!(headers.contains_key(reqwest::header::HOST));
+        assert!(headers.contains_key(wreq::header::CONTENT_TYPE));
+        assert!(headers.contains_key(wreq::header::HOST));
     }
 
     /// `cas_headers` 的 Host 必须指向认证平台
@@ -382,7 +369,7 @@ mod tests {
         let client = Client::with_defaults().unwrap();
         let headers = client.cas_headers();
         assert_eq!(
-            headers.get(reqwest::header::HOST).unwrap(),
+            headers.get(wreq::header::HOST).unwrap(),
             CAS_HOST,
             "cas_headers 的 Host 必须是认证平台域名"
         );
@@ -393,7 +380,7 @@ mod tests {
     fn cas_headers_for_overrides_host() {
         let client = Client::with_defaults().unwrap();
         let headers = client.cas_headers_for("example.com");
-        assert_eq!(headers.get(reqwest::header::HOST).unwrap(), "example.com");
+        assert_eq!(headers.get(wreq::header::HOST).unwrap(), "example.com");
     }
 
     /// loginUserToken 应是合法的 HeaderValue（不含空格等非法字符）

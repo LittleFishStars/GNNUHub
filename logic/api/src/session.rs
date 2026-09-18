@@ -83,12 +83,12 @@ impl Session {
     /// （查询串、表单体等），因此三种请求形态共用同一条路径。
     async fn send<F>(&self, url: &str, build: F) -> Result<String>
     where
-        F: FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+        F: FnOnce(wreq::RequestBuilder) -> wreq::RequestBuilder,
     {
         let cookie = self.cookie_header();
         let response = self
             .client
-            .throttled(|http| build(http.get(url)).header(reqwest::header::COOKIE, &cookie))
+            .throttled(|http| build(http.get(url)).header(wreq::header::COOKIE, &cookie))
             .await?;
 
         let status = response.status();
