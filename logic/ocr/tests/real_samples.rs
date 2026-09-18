@@ -12,7 +12,7 @@ use base64::Engine as _;
 use gnnuhub_ocr::bitmap::extract_glyphs_for_bench;
 
 fn repo_root() -> PathBuf {
-    // crates/gnnuhub-ocr -> 仓库根
+    // logic/ocr -> 仓库根
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())

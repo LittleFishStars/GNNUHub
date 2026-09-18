@@ -1,25 +1,21 @@
 [package]
-name = "gnnuhub-app"
+name = "gnnuhub-desktop"
+description = "GNNUHub 桌面客户端（Tauri 2，各平台 UI 实现之一）"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "GNNUHub 桌面客户端（Tauri 2）"
 
 [build-dependencies]
 tauri-build.workspace = true
 
 [dependencies]
-gnnuhub-core.workspace = true
-gnnuhub-api.workspace = true
-gnnuhub-ocr.workspace = true
+# UI 实现只允许依赖应用服务层（gnnuhub-service），
+# 不直接依赖 gnnuhub-api / gnnuhub-core —— 见 logic/service 的分层文档。
+gnnuhub-service.workspace = true
 
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 
 tauri.workspace = true

@@ -2,6 +2,20 @@
 
 赣南师范大学教务系统 Rust 重写。参考实现：`/home/ylxc/Projects/python/GNNU_API`。
 
+## 仓库架构（2026-09-18 用户定稿，勿再放回 crates/）
+
+**逻辑与界面两大块，界面按平台细分**：
+
+- `logic/`（按业务功能分 crate）：`core/`（模型与错误）、`crypto/`、
+  `ocr/`、`api/`（教务客户端）、`service/`（UI 无关应用服务层，
+  `HubService` + `ServiceError`，**各 UI 的唯一入口**）
+- `ui/`（按平台分实现）：`desktop/`（gnnuhub-desktop，Tauri 2）。
+  将来 CLI / 移动端 / Web 服务端等放 `ui/` 下新目录。
+- **分层纪律**：`ui/` 实现只允许依赖 `gnnuhub-service`（加其 re-export
+  的 `model`），不得直接依赖 `gnnuhub-api`/`gnnuhub-core`。
+- 新增业务功能 → 在 logic/ 里加方法或 crate；新增平台 → ui/ 里加
+  目录，复用 service。
+
 ## 硬性约束（来自用户明确要求，务必遵守）
 
 - **控制请求量**：用户曾多次因 IP 被封而强烈不满。每轮对话最多 ~20 次
@@ -143,7 +157,7 @@
 ## 验证码识别的现状（2026-09-18 更新）
 
 - **字库：70 条、覆盖 62 个字符（`0-9A-Za-z` 一个不缺）**
-  `crates/gnnuhub-ocr/assets/bitmap_lib.json`，由 100 张真实样本构建。
+  `logic/ocr/assets/bitmap_lib.json`，由 100 张真实样本构建。
   样本目录 `captcha_samples/` 下的同名 json 只是**副本**，改动后要手动同步
   （但代码一律读**内嵌资产库**，副本仅供人工查阅——早期踩过「改了资产库
   却发现没生效」的坑，就是读了副本）。

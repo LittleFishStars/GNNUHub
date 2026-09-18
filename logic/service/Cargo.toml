@@ -1,0 +1,20 @@
+[package]
+name = "gnnuhub-service"
+description = "GNNUHub UI 无关的应用服务层（会话生命周期与用例编排）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+gnnuhub-core.workspace = true
+gnnuhub-api.workspace = true
+gnnuhub-ocr.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "time"] }

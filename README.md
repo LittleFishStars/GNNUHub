@@ -9,24 +9,30 @@
 
 ## 项目定位
 
-本项目将学校教务系统的接口重新打包为 Rust 库，核心逻辑与界面层解耦：
+本项目将学校教务系统的接口重新打包为 Rust 库。整个仓库分为**逻辑**与
+**界面**两大块，界面再按平台细分实现：
 
-- **核心层（Rust）**：负责加密、登录、接口调用与数据解析，编译为库供上层链接
-- **界面层**：技术栈待定，可以是 Tauri、egui/iced，或其他原生框架
+- **逻辑（`logic/`）**：加密、登录、接口调用、数据解析与应用用例，
+  全部编译为平台无关的库
+- **界面（`ui/`）**：各平台的 UI 实现（当前为 Tauri 桌面端），
+  只依赖逻辑层的应用服务，不直接触碰接口客户端
 
 ## 目录结构
 
 ```
 GNNUHub/
-├── Cargo.toml                  # 工作区配置
-├── crates/
-│   ├── gnnuhub-core/           # 核心类型、错误、常量
-│   ├── gnnuhub-crypto/         # RSA 密码与令牌加密
-│   ├── gnnuhub-ocr/            # 验证码识别抽象层
-│   └── gnnuhub-api/            # 教务系统接口客户端
-│       ├── src/                # 登录、会话、解析
-│       ├── examples/           # 可运行的调试与抓取工具
-│       └── tests/              # 真实页面回归测试与夹具
+├── Cargo.toml                  # 工作区配置（分层规则见其中注释）
+├── logic/                      # 逻辑：按业务功能划分
+│   ├── core/                   # gnnuhub-core：核心类型、错误、常量
+│   ├── crypto/                 # gnnuhub-crypto：RSA 密码与令牌加密
+│   ├── ocr/                    # gnnuhub-ocr：验证码识别（位图查表）
+│   ├── api/                    # gnnuhub-api：教务系统接口客户端
+│   │   ├── src/                # 登录、会话、解析
+│   │   ├── examples/           # 可运行的调试与抓取工具
+│   │   └── tests/              # 真实页面回归测试与夹具
+│   └── service/                # gnnuhub-service：UI 无关的应用服务层
+├── ui/                         # 界面：按平台划分实现
+│   └── desktop/                # gnnuhub-desktop：Tauri 2 桌面客户端
 └── tools/
     ├── captcha-collector/      # 验证码样本采集脚本（Python）
     └── js-recon/               # 前端资源离线逆向（抓取 + 分析）
@@ -40,6 +46,11 @@ GNNUHub/
 | `gnnuhub-crypto` | 复刻前端 JS 的 RSA 加密，用于密码与 `loginUserToken` | `num-bigint` |
 | `gnnuhub-ocr` | 验证码识别（位图查表） | `image`、`base64` |
 | `gnnuhub-api` | 登录流程、会话管理、接口调用与解析 | `reqwest`、`scraper` |
+| `gnnuhub-service` | 应用用例与会话生命周期，错误分类（UI 唯一入口） | `gnnuhub-api` |
+| `gnnuhub-desktop` | Tauri 2 桌面端，把服务层命令暴露给前端 | `gnnuhub-service` |
+
+> 分层规则：`ui/` 下的实现**只允许依赖 `gnnuhub-service`**，
+> 详见 `logic/service/src/lib.rs` 的模块文档。
 
 ## 技术选型
 
@@ -152,7 +163,7 @@ TLS close_notify`）——这是针对「已持有会话却重放登录页」的
 `(字符, 字号)` 组合在不同图片、不同颜色下产生逐像素相同的点阵，因此识别
 退化成查表，准确率上限只取决于字库覆盖度。
 
-- 字库内嵌于 `crates/gnnuhub-ocr/assets/bitmap_lib.json`（70 个字形、
+- 字库内嵌于 `logic/ocr/assets/bitmap_lib.json`（70 个字形、
   覆盖 `0-9A-Za-z` 共 62 个字符），在 100 张真实样本上**字形级
   400/400 = 100%**、整图 100/100 = 100%。
 - **真值实测 72/72 = 100%**（用真实登录验证识别对错，工具见

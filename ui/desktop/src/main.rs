@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    gnnuhub_app::run();
+    gnnuhub_desktop::run();
 }

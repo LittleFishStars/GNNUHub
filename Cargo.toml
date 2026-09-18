@@ -1,11 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/gnnuhub-core",
-    "crates/gnnuhub-crypto",
-    "crates/gnnuhub-ocr",
-    "crates/gnnuhub-api",
-    "crates/gnnuhub-app",
+    "logic/core",
+    "logic/crypto",
+    "logic/ocr",
+    "logic/api",
+    "logic/service",
+    "ui/desktop",
 ]
 
 [workspace.package]
@@ -19,10 +20,15 @@ description = "赣南师范大学教务系统接口与客户端"
 
 [workspace.dependencies]
 # 内部 crate
-gnnuhub-core = { path = "crates/gnnuhub-core" }
-gnnuhub-crypto = { path = "crates/gnnuhub-crypto" }
-gnnuhub-ocr = { path = "crates/gnnuhub-ocr" }
-gnnuhub-api = { path = "crates/gnnuhub-api" }
+#
+# 分层规则（详见 logic/service 的文档）：
+#   logic/  = 业务逻辑（core 模型 → api 教务客户端 → service 应用用例）
+#   ui/     = 各平台界面实现（只允许依赖 service，不直接碰 api）
+gnnuhub-core = { path = "logic/core" }
+gnnuhub-crypto = { path = "logic/crypto" }
+gnnuhub-ocr = { path = "logic/ocr" }
+gnnuhub-api = { path = "logic/api" }
+gnnuhub-service = { path = "logic/service" }
 
 # 序列化
 serde = { version = "1", features = ["derive"] }

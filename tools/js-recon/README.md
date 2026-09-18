@@ -76,7 +76,7 @@ GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
 cargo test -p gnnuhub-api --test real_page_check
 ```
 
-夹具在 `crates/gnnuhub-api/tests/fixtures/`，**已脱敏**。
+夹具在 `logic/api/tests/fixtures/`，**已脱敏**。
 
 ## 注意事项
 

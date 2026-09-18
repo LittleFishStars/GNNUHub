@@ -9,7 +9,7 @@
 //!
 //! # 字库来源
 //!
-//! 默认用 **crate 内嵌的资产库**（`crates/gnnuhub-ocr/assets/bitmap_lib.json`），
+//! 默认用 **crate 内嵌的资产库**（`logic/ocr/assets/bitmap_lib.json`），
 //! 也就是真正出货给用户的那个。
 //!
 //! 这一点是刻意的：早期版本读的是样本目录下的 `captcha_samples/bitmap_lib.json`，

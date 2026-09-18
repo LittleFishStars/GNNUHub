@@ -1319,22 +1319,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gnnuhub-app"
-version = "0.1.0"
-dependencies = [
- "gnnuhub-api",
- "gnnuhub-core",
- "gnnuhub-ocr",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "gnnuhub-core"
 version = "0.1.0"
 dependencies = [
@@ -1356,6 +1340,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnnuhub-desktop"
+version = "0.1.0"
+dependencies = [
+ "gnnuhub-service",
+ "tauri",
+ "tauri-build",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "gnnuhub-ocr"
 version = "0.1.0"
 dependencies = [
@@ -1365,6 +1359,18 @@ dependencies = [
  "image",
  "serde_json",
  "thiserror 2.0.20",
+ "tracing",
+]
+
+[[package]]
+name = "gnnuhub-service"
+version = "0.1.0"
+dependencies = [
+ "gnnuhub-api",
+ "gnnuhub-core",
+ "gnnuhub-ocr",
+ "thiserror 2.0.20",
+ "tokio",
  "tracing",
 ]
 
