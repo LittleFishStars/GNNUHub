@@ -24,6 +24,7 @@
 //! 请求预算：登录 ~5 + A1 + B1 + C2 + D1 ≤ 10。
 
 use gnnuhub_api::{Client, Session};
+use gnnuhub_core::JWGL_BASE_URL;
 use gnnuhub_ocr::BitmapOcr;
 
 const PATH: &str = "/kbcx/xskbcx_cxXsgrkb.html";
@@ -275,6 +276,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.len(),
         t.chars().take(80).collect::<String>()
     );
+
+    // M: 借用用户浏览器的会话 Cookie（HAR 提供，只读操作）发同一请求。
+    //    成功 → 请求形状无问题，是我们程序登录的新会话被 WAF 标记
+    //    （今日程序化登录十余次）；仍 null → 形状仍有差异。
+    println!("\n[M] 浏览器会话 Cookie 直发（决定性实验）");
+    let resp = client
+        .http()
+        .post(format!("{JWGL_BASE_URL}{PATH}?gnmkdm=N2151"))
+        .header(
+            "Cookie",
+            "SF_cookie_17=36085226; JSESSIONID=816F8EAA445F151CA1434AC2BBB815B3",
+        )
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header(
+            "Referer",
+            "https://jwgl.gnnu.edu.cn/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151&layout=default",
+        )
+        .header("Origin", "https://jwgl.gnnu.edu.cn")
+        .header(
+            "Content-Type",
+            "application/x-www-form-urlencoded;charset=utf-8",
+        )
+        .body("xnm=2026&xqm=3&kzlx=ck&xsdm=&kclbdm=&kclxdm=")
+        .send()
+        .await?;
+    let status = resp.status();
+    if status.is_redirection()
+        && let Some(loc) = resp.headers().get("Location").and_then(|v| v.to_str().ok())
+    {
+        println!("  [M] → HTTP {status}，Location: {loc}");
+        return Ok(());
+    }
+    let text = resp.text().await?;
+    let t2 = text.trim();
+    let mut detail = format!(
+        "HTTP {status}，{} 字节，开头: {}",
+        t2.len(),
+        t2.chars().take(60).collect::<String>()
+    );
+    if t2.starts_with('{')
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(t2)
+        && let Some(n) = v.get("kbList").and_then(|k| k.as_array()).map(|a| a.len())
+    {
+        detail = format!("HTTP {status}，kbList={n}");
+        if n > 0 {
+            let _ = std::fs::write("tools/js-recon/out/pages/kb_BROWSER_SESSION.json", t2);
+        }
+    }
+    println!("  [M] → {detail}");
 
     Ok(())
 }

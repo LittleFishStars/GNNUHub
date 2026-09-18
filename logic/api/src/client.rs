@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use gnnuhub_core::{CAS_HOST, Error, JWGL_BASE_URL, Result};
 
@@ -97,6 +97,23 @@ impl Client {
         headers.insert(
             reqwest::header::ACCEPT_LANGUAGE,
             HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
+        );
+        // Sec-Fetch 三件套：现代浏览器对所有请求都会携带，而桌面
+        // HTTP 库默认不带。真实抓包对比（2026-09-18 HAR）确认教务
+        // 系统的课表接口会校验这组头——「UA 声称是 Chrome 却没有
+        // Sec-Fetch」的请求被 WAF 识别为伪造并静默返回 null
+        // （学籍/考试等接口规则较松不受影响，因此此前未暴露）。
+        headers.insert(
+            HeaderName::from_static("sec-fetch-dest"),
+            HeaderValue::from_static("empty"),
+        );
+        headers.insert(
+            HeaderName::from_static("sec-fetch-mode"),
+            HeaderValue::from_static("cors"),
+        );
+        headers.insert(
+            HeaderName::from_static("sec-fetch-site"),
+            HeaderValue::from_static("same-origin"),
         );
 
         let http = reqwest::Client::builder()
