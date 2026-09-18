@@ -146,7 +146,20 @@
   `xjztdm`、学制 `xz`、生源地 `syd`、入学总分 `rxzf` 等字段；
   `zyh_id` 是干净专业名免剥后缀。`fetch_student_info` 走它，
   失败回退 HTML。
-- **⚠️ 课表接口 2026-09-18 下午起恒定返回 null（学校端问题）**：
+- **🔴 课表接口 null 的根因（2026-09-18 晚定性，14 组实验）**：
+  **WAF 用 TLS 指纹校验区分真实浏览器与程序化客户端**。证据链：
+  浏览器 200+18 条课表；程序任意形状（Chrome/Firefox UA、任意头
+  组合、Sec-Fetch、会话上下文）恒定 null；**借用浏览器会话 Cookie
+  立即被拦 HTTP 901**（WAF 拦截码，会话-指纹绑定校验）；Firefox
+  UA 全新会话仍 null（排除应用层）。reqwest/rustls 的 TLS 握手
+  指纹与浏览器不同，**应用层无法绕过**。课表/移动端课表接口启用
+  了校验，学籍/考试接口未启用。上午成功系 WAF 规则上线前窗口期
+  （当日部署更新 3 次，ver 29769310→316）。**修复选项**：
+  a) 换 impersonate 类客户端（rquest / reqwest-impersonate，需
+     BoringSSL 工具链）；b) 等 WAF 策略变化。补充：client.rs 已
+     补 Sec-Fetch 三件套默认头。探针：probe_kb_null（A-M）、
+     probe_kb_ua（N）。
+- **（历史）课表接口 2026-09-18 下午起恒定返回 null**：
   `xskbcx_cxXsgrkb.html` 对所有学期、所有形状（A-J 十组对照实验）
   恒定 `null`，同日早些同形状实测成功过 9 门课；前端 JS 对
   `data==null` 有显式处理（浏览器也显示空课表）。**修正早前判断：
