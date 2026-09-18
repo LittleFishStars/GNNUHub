@@ -115,6 +115,16 @@ impl BitmapLibrary {
         self.exact.is_empty()
     }
 
+    /// 字库覆盖到的所有字符（去重）
+    ///
+    /// 用于「字库是否漏了某个字符」这类检查。**不要**用条目数代替：
+    /// 同一字符可能有多个字形（同一字号下也会因抗锯齿抖动产生多份），
+    /// 条目数多于字符数。漏字符是静默的——字形级命中率仍可能是 100%，
+    /// 只有整图准确率会掉。
+    pub fn labels(&self) -> impl Iterator<Item = char> + '_ {
+        self.exact.values().copied()
+    }
+
     /// 从 JSON 文本解析字库
     pub fn from_json(text: &str) -> Result<Self> {
         let parsed: serde_json::Value = serde_json::from_str(text)

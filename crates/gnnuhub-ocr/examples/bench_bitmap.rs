@@ -6,6 +6,22 @@
 //! ```
 //!
 //! 输出：字库大小、字形级命中率、整图级命中率、以及未命中的明细。
+//!
+//! # 字库来源
+//!
+//! 默认用 **crate 内嵌的资产库**（`crates/gnnuhub-ocr/assets/bitmap_lib.json`），
+//! 也就是真正出货给用户的那个。
+//!
+//! 这一点是刻意的：早期版本读的是样本目录下的 `captcha_samples/bitmap_lib.json`，
+//! 那是构建字库时留下的**副本**。结果改完资产库、跑基准却发现「改动没生效」，
+//! 白白绕了一大圈排查。**基准必须测出货产物，不能测中间副本。**
+//!
+//! 若要做对照（例如评估「重新生成的字库比出货版好多少」），用第二个位置参数
+//! 显式给一个路径：
+//!
+//! ```bash
+//! cargo run -p gnnuhub-ocr --example bench_bitmap -- captcha_samples .scratch/new_lib.json
+//! ```
 
 use std::path::PathBuf;
 
@@ -18,10 +34,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .nth(1)
             .unwrap_or_else(|| "captcha_samples".into()),
     );
-    let lib_path = dir.join("bitmap_lib.json");
 
-    let lib = BitmapLibrary::from_path(&lib_path)?;
-    println!("字库：{} 条（{}）", lib.len(), lib_path.display());
+    // 默认内嵌资产库；显式传第二个参数才读外部文件做对照。
+    let (lib, source) = match std::env::args().nth(2) {
+        Some(p) => {
+            let path = PathBuf::from(&p);
+            let lib = BitmapLibrary::from_path(&path)?;
+            let src = path.display().to_string();
+            (lib, src)
+        }
+        None => (gnnuhub_ocr::embedded_library()?, "内嵌资产库".to_string()),
+    };
+    println!("字库：{} 条（{source}）", lib.len());
 
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
         .filter_map(|e| e.ok())
