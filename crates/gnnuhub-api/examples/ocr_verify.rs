@@ -6,30 +6,44 @@
 //! 只有「多个识别配置是否互相一致」，那叫自洽性，不等于准确率。要拿到
 //! 真实准确率，唯一可靠的地面真值是登录接口本身。
 //!
-//! # 判据
+//! # 两种模式
 //!
-//! `login::parse_ticket_response` 已经把登录失败干净地分成几类：
+//! ## 模式 A：正确密码（推荐）
 //!
-//! | 服务端返回 | 判定 | 含义 |
-//! |---|---|---|
-//! | `data.code == "CODEFALSE"` | [`LoginOutcome::CaptchaIncorrect`] | **识别错了** |
-//! | `data.code == "PASSERROR"` | [`LoginOutcome::BadCredentials`] | **识别对了**（密码错是预期的） |
-//! | `statusCode == "USERNAMEORPASSWORDERROR"` | [`LoginOutcome::BadCredentials`] | **识别对了** |
-//! | `data.code == "USERLOCK"` | [`LoginOutcome::AccountLocked`] | **账号被锁，立即终止** |
-//! | 顶层带 `tgt` + `ticket` | [`LoginOutcome::Success`] | **识别对了**（且登录成功） |
+//! 判据最直接：
 //!
-//! 用错密码是关键技巧：这样账密校验必然失败，于是**只要不是 `CODEFALSE`
-//! 就说明验证码读对了**，不会有「识别正确因而登录成功、消耗真实登录次数」
-//! 的副作用。工具会主动拒绝正确密码，避免误用。
+//! | 服务端返回 | 判定 |
+//! |---|---|
+//! | 顶层带 `tgt` + `ticket` | **识别对了**（且登录成功） |
+//! | `data.code == "CODEFALSE"` | **识别错了** |
 //!
-//! # 账号锁定是终止条件
+//! **不会锁号**：`USERLOCK` 是由「连续账密错误」累计触发的，正确密码
+//! 不进这个计数。所以这是**唯一能连续跑量**的模式。
 //!
-//! 同一账号短时间内连续账密错误会触发 `USERLOCK`。**这不是可重试失败**：
-//! 继续提交只会加重锁定。因此本工具一旦收到 `USERLOCK` 就立刻停止，
-//! 并在汇总里显式说明「是账号被锁，不是网络或工具问题」。
+//! 代价是每次读对都会**真的建立一次会话**。本工具拿到 ticket 后
+//! **立刻丢弃、不做任何后续请求**（不换会话、不拉学籍），把请求量压到
+//! 最低。这是刻意的：识别对错是唯一目的。
 //!
-//! 也正因如此，**每轮都发一个真实错密码是有代价的**——本工具的轮数应
-//! 当作一种配额来用，不要为了凑样本反复跑。
+//! ## 模式 B：错密码
+//!
+//! 用「账密必然失败」来判定：只要不是 `CODEFALSE` 就说明验证码读对了。
+//!
+//! ⚠️ **错密码不免费**：同一账号连发 **3 次**错密码即触发 `USERLOCK`
+//! （实测），此后无法登录。轮数必须当**配额**用。
+//!
+//! 这个模式现在只用于「验证码到期 / 服务端换样式」这类一次性探查，
+//! **不适合用来量准确率**。
+//!
+//! # 选哪个模式
+//!
+//! 由密码**是否正确**自动决定，无需手动指定——但这意味着工具无法在本地
+//! 判断你给的是哪个模式。因此启动时会打印当前模式，并明确告知该模式的
+//! 代价。**想量准确率就给正确密码**。
+//!
+//! # `USERLOCK` 是终止条件
+//!
+//! 两种模式下都一样：一旦收到 `USERLOCK` 立刻停止，并在汇总里显式说明
+//! 「是账号被锁，不是网络或工具问题」。
 //!
 //! # 必须现场取验证码
 //!
@@ -39,9 +53,7 @@
 //!
 //! # 识别引擎
 //!
-//! 默认用 [`BitmapOcr`] 位图查表（内嵌字库，60 张样本构建，65 字形 /
-//! 59 字符）。加 `--features tesseract` 后用 `recommended_with_tesseract`
-//! 走「位图 -> tesseract -> 人工」的链路，两者结果会同时打印以便对比。
+//! 默认用位图查表（内嵌字库，65 字形 / 59 字符）。
 //!
 //! 每轮把四个字形的**匹配质量**一并打印（`=` 精确命中、`~N` 模糊命中且
 //! 汉明距离为 N、`!` 未命中），这样失败轮次能立刻看出是「字库缺条目」
@@ -56,7 +68,7 @@
 //! # 运行
 //!
 //! ```bash
-//! GNNU_STUDENT_ID=xxx GNNU_PASSWORD='故意写错的密码' \
+//! GNNU_STUDENT_ID=xxx GNNU_PASSWORD='正确密码' \
 //!   cargo run -p gnnuhub-api --example ocr_verify -- 20
 //! ```
 //!
@@ -65,8 +77,8 @@
 //!
 //! # ⚠️ 风险
 //!
-//! 这会向认证平台发真实登录请求。虽然用的是错密码，但**连续失败仍可能
-//! 触发账号风控**。请从小轮数开始，观察结果正常再加大。
+//! 这会向认证平台发真实登录请求并建立真实会话。请从小轮数开始。
+//! **密码只从环境变量读，绝不写入代码或仓库。**
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -189,11 +201,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let student_id: u64 = std::env::var("GNNU_STUDENT_ID")?.parse()?;
     let password = std::env::var("GNNU_PASSWORD")?;
 
-    // 保险：如果用户误填了正确密码，一旦登录成功会消耗一次真实登录。
-    // 这里不主动去验证密码对错（那本身也是个请求），而是提醒。
-    println!("⚠️  请确认 GNNU_PASSWORD 填的是**错误密码**。");
-    println!("    本工具靠「账密必然失败」来区分验证码对错；");
-    println!("    若填了正确密码，命中正确验证码时会真的登录成功。");
+    // 本工具无法在本地判断密码对错（那本身要发请求），只能把两种模式的
+    // 判据与代价都讲清楚，让使用者自己知道当前会走向哪条判定路径。
+    println!("判定模式由密码正确与否决定，请自行确认：");
+    println!("  正确密码 -> 登录成功即「识别对了」，**不会锁号**，可连续跑量（推荐）");
+    println!("  错误密码 -> 非 CODEFALSE 即「识别对了」，但**连发 3 次错密码就锁号**");
+    println!();
+    println!("无论哪种模式，本工具拿到 ticket 后都会**立即丢弃**，");
+    println!("不换取会话、不拉任何数据，把请求量压到最低。");
     println!();
 
     // 直接加载内嵌字库，拿到引用以便逐字形查表
@@ -232,6 +247,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 账号是否被锁定。锁定是终止条件，summary 里必须显式说明，
     // 否则「只跑了 3 轮」看起来像是工具坏了或网络不通。
     let mut locked = false;
+    // 实际走的是哪种判定模式。启动时无法预知（取决于密码对错），
+    // 但第一轮结果就能反推出来，汇总里报出来避免误读准确率。
+    let mut mode_hint = "unknown";
 
     for index in 1..=rounds {
         println!("---- 第 {index}/{rounds} 轮 ----");
@@ -349,7 +367,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ("wrong", "服务端返回 CODEFALSE，识别错误".to_string())
             }
             LoginOutcome::BadCredentials(msg) => {
+                // 只有「错密码模式」才会走到这里：账密失败是预期的，
+                // 而验证码没被判为 CODEFALSE，说明读对了。
                 correct += 1;
+                mode_hint = "pass-error";
                 (
                     "correct",
                     format!("账密错误（预期），说明验证码读对了: {msg}"),
@@ -372,10 +393,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             LoginOutcome::Success { .. } => {
+                // 只有「正确密码模式」才会走到这里，且这是**最干净的判据**：
+                // 登录成功意味着服务端认可了验证码。
+                //
+                // 关键：**立刻丢弃 tgt/ticket**。本工具到此为止，
+                // 不调用 exchange_ticket_for_session，因此不会建立任何
+                // 后续会话、不拉任何数据。识别对错是唯一目的。
                 correct += 1;
+                mode_hint = "success";
                 (
                     "correct",
-                    "登录成功——注意这意味着密码是对的，本次判定同样说明识别正确".to_string(),
+                    "登录成功，服务端认可了验证码；ticket 已丢弃、未建立会话".to_string(),
                 )
             }
         };
@@ -401,6 +429,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   锁定来自短期内的连续账密错误。等待解锁后再运行。");
         println!();
     }
+    match mode_hint {
+        "success" => println!("判定模式：**正确密码**（登录成功即读对，不锁号）"),
+        "pass-error" => {
+            println!("判定模式：**错密码**（非 CODEFALSE 即读对）");
+            println!("⚠️ 错密码连发 3 次即锁号，本次轮数已消耗失败配额");
+        }
+        _ => {}
+    }
+    println!();
     println!("已判定轮数: {judged}");
     println!("  识别正确: {correct}");
     println!("  识别错误: {wrong}");
@@ -450,6 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "wrong": wrong,
         "unrecognized": unrecognized,
         "locked": locked,
+        "mode": mode_hint,
         "accuracy": if judged > 0 { Some(correct as f64 / judged as f64) } else { None },
         "glyph": {
             "exact": g_exact,
