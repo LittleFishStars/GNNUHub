@@ -99,6 +99,16 @@
 - **登录接口可验验证码真值**：`parse_ticket_response` 把
   `data.code == "CODEFALSE"` 映射为 `LoginOutcome::CaptchaIncorrect`，
   与 `BadCredentials` 干净区分，因此能用真实登录判定识别对错。
+- **CAS 票据接口实测的业务码（全部为真实抓到的原文）**：
+  - `{"data":{"code":"PASSERROR","data":"5,3"}}` → **密码错误**，验证码是对的。
+    `data` 是 `剩余次数,已用次数`。
+  - `{"data":{"code":"USERLOCK"}}` → **账号锁定**，**禁止重试**（重试加重锁定）。
+    映射到独立分支 `LoginOutcome::AccountLocked`。
+  - `{"data":{"code":"CODEFALSE"}}` → 验证码错误。
+  - 注意密码错误走的是 **`data.code`，不是 `meta.statusCode`**；早前文档里
+    写的 `USERNAMEORPASSWORDERROR` 没在这条链路上观察到。
+- **错误密码不是免费的**：同一账号连发 **3 次**错密码即触发 `USERLOCK`。
+  `ocr_verify` 的轮数要当**配额**用，不要为凑样本反复跑。
 - 认证平台「地址改为服务部署地址」这种提示与实际登录失败无必然关系。
 - `xqm` 取值是 **3（第一学期）/ 12（第二学期）**，不是 1/2。
 
@@ -131,11 +141,13 @@
   2. **`TesseractOcr`（feature `tesseract`，默认关闭）**：通用 OCR，
      样本集约 78%，作为字库缺条目时的兜底
      （`FailoverOcr::recommended_with_tesseract()`）。
-- **真实准确率仍待用登录接口验证**（`examples/ocr_verify.rs`，需凭据）。
-  该工具已改造完毕（commit `a7da505`）：默认走位图引擎、**不需要 tesseract**，
-  逐字形打印匹配质量（`=` 精确 / `~N` 模糊距离 N / `!` 未命中），有未命中就
-  跳过提交以省请求。运行：
-  `GNNU_STUDENT_ID=250710078 GNNU_PASSWORD='错密码' cargo run -p gnnuhub-api --example ocr_verify -- 20`
-  留出交叉验证（非循环）参考值：训练 55 张时字形命中 95.8%、整图约 84%。
+- **验证码识别已用真值验证过（小样本）**：`examples/ocr_verify.rs`（默认走
+  位图引擎，**不需要 tesseract**）实测 3 轮，其中 2 轮提交成功且服务端都返回
+  `PASSERROR`（即**读对了**），**12/12 字形全部 `exact` 精确命中、模糊 0、
+  未命中 0**。第 3 轮因账号锁定终止。样本太小，只能说明「链路正确」，
+  不能当准确率估计。
+  - 运行：`GNNU_STUDENT_ID=250710078 GNNU_PASSWORD='错密码' RUST_LOG=gnnuhub_api=debug cargo run -p gnnuhub-api --example ocr_verify -- 20`
+  - ⚠️ 错密码连发 3 次即锁号，**轮数当配额用**。
+  - 留出交叉验证（非循环）参考值：训练 55 张时字形命中 95.8%、整图约 84%。
 - 再抓样本仍有收益：Chao1 估计字库共约 67 条，目前 65 条。
 - 界面层框架未选（用户明确表示稍后再定）
