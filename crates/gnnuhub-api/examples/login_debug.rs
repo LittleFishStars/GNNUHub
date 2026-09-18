@@ -131,6 +131,11 @@ async fn submit_login(uid: &str, code: &str) -> Result<(), Box<dyn std::error::E
         gnnuhub_api::LoginOutcome::BadCredentials(msg) => {
             println!("凭据错误: {msg}");
         }
+        gnnuhub_api::LoginOutcome::AccountLocked(msg) => {
+            // 锁定态不是可重试失败，明确提示不要继续尝试
+            println!("账号已锁定: {msg}");
+            println!("请等待解锁后再试，期间不要重复提交登录请求。");
+        }
     }
 
     Ok(())

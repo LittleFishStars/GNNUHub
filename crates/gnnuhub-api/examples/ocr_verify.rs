@@ -8,17 +8,28 @@
 //!
 //! # 判据
 //!
-//! `login::parse_ticket_response` 已经把登录失败干净地分成两类：
+//! `login::parse_ticket_response` 已经把登录失败干净地分成几类：
 //!
 //! | 服务端返回 | 判定 | 含义 |
 //! |---|---|---|
 //! | `data.code == "CODEFALSE"` | [`LoginOutcome::CaptchaIncorrect`] | **识别错了** |
-//! | `statusCode == "USERNAMEORPASSWORDERROR"` | [`LoginOutcome::BadCredentials`] | **识别对了**（密码错是预期的） |
+//! | `data.code == "PASSERROR"` | [`LoginOutcome::BadCredentials`] | **识别对了**（密码错是预期的） |
+//! | `statusCode == "USERNAMEORPASSWORDERROR"` | [`LoginOutcome::BadCredentials`] | **识别对了** |
+//! | `data.code == "USERLOCK"` | [`LoginOutcome::AccountLocked`] | **账号被锁，立即终止** |
 //! | 顶层带 `tgt` + `ticket` | [`LoginOutcome::Success`] | **识别对了**（且登录成功） |
 //!
 //! 用错密码是关键技巧：这样账密校验必然失败，于是**只要不是 `CODEFALSE`
 //! 就说明验证码读对了**，不会有「识别正确因而登录成功、消耗真实登录次数」
 //! 的副作用。工具会主动拒绝正确密码，避免误用。
+//!
+//! # 账号锁定是终止条件
+//!
+//! 同一账号短时间内连续账密错误会触发 `USERLOCK`。**这不是可重试失败**：
+//! 继续提交只会加重锁定。因此本工具一旦收到 `USERLOCK` 就立刻停止，
+//! 并在汇总里显式说明「是账号被锁，不是网络或工具问题」。
+//!
+//! 也正因如此，**每轮都发一个真实错密码是有代价的**——本工具的轮数应
+//! 当作一种配额来用，不要为了凑样本反复跑。
 //!
 //! # 必须现场取验证码
 //!
@@ -157,8 +168,13 @@ fn recognize_with_quality(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 默认安静（只报 warn），但允许用 RUST_LOG 打开 debug —— 排查
+    // 「服务端返回了没见过的业务码」这类问题时，debug 里的原始响应体
+    // 是唯一的信息源。
+    let filter = std::env::var("RUST_LOG")
+        .unwrap_or_else(|_| "gnnuhub_api=warn,gnnuhub_ocr=warn".to_string());
     tracing_subscriber::fmt()
-        .with_env_filter("gnnuhub_api=warn,gnnuhub_ocr=warn")
+        .with_env_filter(filter)
         .with_target(false)
         .init();
 
@@ -213,6 +229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut g_fuzzy = 0usize;
     let mut g_miss = 0usize;
     let mut miss_dims: Vec<String> = Vec::new();
+    // 账号是否被锁定。锁定是终止条件，summary 里必须显式说明，
+    // 否则「只跑了 3 轮」看起来像是工具坏了或网络不通。
+    let mut locked = false;
 
     for index in 1..=rounds {
         println!("---- 第 {index}/{rounds} 轮 ----");
@@ -336,6 +355,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     format!("账密错误（预期），说明验证码读对了: {msg}"),
                 )
             }
+            LoginOutcome::AccountLocked(msg) => {
+                // 账号锁定是**终止条件**，不是可重试失败。
+                // 立刻停手：继续提交只会加重锁定。
+                eprintln!();
+                eprintln!("⛔ 账号已被锁定，立即停止：{msg}");
+                eprintln!("   请等待解锁后再运行本工具，期间不要重复提交。");
+                results.push(RoundResult {
+                    index,
+                    code: Some(code.clone()),
+                    verdict: "locked",
+                    detail: msg.clone(),
+                    glyphs: hits,
+                });
+                locked = true;
+                break;
+            }
             LoginOutcome::Success { .. } => {
                 correct += 1;
                 (
@@ -361,6 +396,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let judged = correct + wrong;
     println!();
     println!("================ 汇总 ================");
+    if locked {
+        println!("⛔ 本次运行因**账号被锁定**而提前终止（不是网络或工具问题）");
+        println!("   锁定来自短期内的连续账密错误。等待解锁后再运行。");
+        println!();
+    }
     println!("已判定轮数: {judged}");
     println!("  识别正确: {correct}");
     println!("  识别错误: {wrong}");
@@ -409,6 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "correct": correct,
         "wrong": wrong,
         "unrecognized": unrecognized,
+        "locked": locked,
         "accuracy": if judged > 0 { Some(correct as f64 / judged as f64) } else { None },
         "glyph": {
             "exact": g_exact,

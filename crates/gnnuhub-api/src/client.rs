@@ -280,6 +280,10 @@ impl Client {
             crate::login::LoginOutcome::CaptchaIncorrect => {
                 return Err(Error::InvalidCaptcha);
             }
+            crate::login::LoginOutcome::AccountLocked(msg) => {
+                // 锁定态必须原样上报，让调用方知道「重试是有害的」。
+                return Err(Error::TicketMissing(format!("账号已锁定: {msg}")));
+            }
         };
 
         let cookies = crate::login::exchange_ticket_for_session(
