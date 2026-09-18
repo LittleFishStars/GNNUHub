@@ -192,6 +192,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         t.chars().take(120).collect::<String>()
     );
 
+    // K: AJAX 指纹矩阵——jQuery $.ajax 自带 X-Requested-With，
+    //    服务端更新后可能开始校验 AJAX 指纹（此前从未实验过）
+    println!("\n[K] AJAX 指纹矩阵");
+    let form = [
+        ("xnm", "2025"),
+        ("xqm", "12"),
+        ("kzlx", "ck"),
+        ("xsdm", ""),
+        ("kclbdm", ""),
+        ("kclxdm", ""),
+    ];
+    let referer =
+        "https://jwgl.gnnu.edu.cn/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151&layout=default";
+    let origin = "https://jwgl.gnnu.edu.cn";
+    let matrix: &[(&str, &[(&str, &str)])] = &[
+        ("K1 XRW", &[("X-Requested-With", "XMLHttpRequest")]),
+        (
+            "K2 XRW+Ref",
+            &[("X-Requested-With", "XMLHttpRequest"), ("Referer", referer)],
+        ),
+        (
+            "K3 XRW+Ref+Origin+Accept",
+            &[
+                ("X-Requested-With", "XMLHttpRequest"),
+                ("Referer", referer),
+                ("Origin", origin),
+                ("Accept", "application/json, text/javascript, */*; q=0.01"),
+            ],
+        ),
+    ];
+    for (tag, headers) in matrix {
+        let body = session
+            .post_form_for_probe(PATH, &[("gnmkdm", "N2151")], &form, headers)
+            .await?;
+        let t = body.trim();
+        let mut detail = format!(
+            "{} 字节，开头: {}",
+            t.len(),
+            t.chars().take(60).collect::<String>()
+        );
+        if t.starts_with('{')
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(t)
+            && let Some(list) = v.get("kbList").and_then(|k| k.as_array())
+        {
+            detail = format!("{} 字节，kbList={}", t.len(), list.len());
+            if !list.is_empty() {
+                let _ = std::fs::write("tools/js-recon/out/pages/kb_SUCCESS.json", t);
+            }
+        }
+        println!("  [{tag}] → {detail}");
+    }
+
+    // L: 补齐浏览器登录后的上下文——首页三件套（index/initMenu/用户信息）
+    //    可能在服务端初始化会话属性，或 Set-Cookie 额外值
+    println!("\n[L] 补齐首页上下文后再试");
+    for path in [
+        "/xtgl/index.html",
+        "/xtgl/index_initMenu.html",
+        "/xtgl/index_cxYhxxIndex.html",
+    ] {
+        match session.fetch_raw(path).await {
+            Ok(html) => println!("    GET {path} → {} 字节", html.len()),
+            Err(e) => println!("    GET {path} → ❌ {e}"),
+        }
+    }
+    // 打印当前会话 Cookie（对比浏览器用）
+    let form2 = [
+        ("xnm", "2025"),
+        ("xqm", "12"),
+        ("kzlx", "ck"),
+        ("xsdm", ""),
+        ("kclbdm", ""),
+        ("kclxdm", ""),
+    ];
+    let body = session
+        .post_form_for_probe(PATH, &[("gnmkdm", "N2151")], &form2, &[])
+        .await?;
+    let t = body.trim();
+    println!(
+        "  [L] → {} 字节，开头: {}",
+        t.len(),
+        t.chars().take(80).collect::<String>()
+    );
+
     Ok(())
 }
 
