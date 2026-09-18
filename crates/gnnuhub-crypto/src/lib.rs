@@ -191,6 +191,9 @@ mod tests {
     ///
     /// 注意每个密文块的长度：模数为 1024 位，密文以 16 进制表示时
     /// 最大 256 字符，实际值前面的 0 会被省略，因此长度可能略短。
+    ///
+    /// 测试向量一律使用**虚构**明文；真实凭据只允许出现在运行时的
+    /// 环境变量里，绝不写入代码或测试。
     #[test]
     fn matches_python_reference_implementation() {
         let cases: &[(&str, &str)] = &[
@@ -207,8 +210,12 @@ mod tests {
                 "22f28a5bebcec7741fd2d7c6496d605dcc480163f38d09cec382c35f9c9e363548efa49e0dbd5ddd2e59948e316b19ceb7b2c58cf5ee0c6ac67a354ff17eed37486344e1fe19c2fdf58c8964aa5e2b1b6dc51a6a10cc8b84adccc228a8d6d8edfbbadc1378a6b10ae239eb7a8101dbe90fb59802728bf7e6637efdae4dd7425e",
             ),
             (
-                "Xhwx@33669",
-                "1452e4545a536b079bc00a87edefb41b8b5a26515daf5c7e8597816ccedf55423228bfcd5faada440c039e9db9d448cde9fdc0cb5f94bb4b2febd34071cc323fe9bf21a6f8a5cea92c134063a5432fa289abce6d4c41ad5efdccb4898c56ae583ca778b00594eb71d3edb97c4f76dc14be0c851ed85a0e49f0a97b9ecd1c34f7",
+                "RefPass#2026",
+                "5c47ec5e586038b4793fb391755265f592154b7f05f182ccefab4b9f330b4d4ba4494062325d23a9794304c070a0cdf574616c4f193262b4947bd711a1f342a5a719c1d28e306d3843f55c9d99b7ce14a729e239b63be934e2ae45fc71f8ce7f1d7f09fb54f02f061093ef622f35015209ce93c50c298b2927210e7df8d4a18",
+            ),
+            (
+                "Str0ng!Pass",
+                "4826032d565b4c455ffe6cac824cb370fc4969a505cf0baa43770a234ee1d8fa8517aaea27fa5c2cf46050c23cf9af638ae53353e111b4e34988e0ee784df73a149d06bd2eacb1e3eed6b4ae37f2747790d8e82520fa4c8576db993ade0f2a22a800038c2e28bda2a8388894553598ea82721880830cd8420c6a4c1858f763f7",
             ),
         ];
 
@@ -218,7 +225,10 @@ mod tests {
                 actual, *expected,
                 "明文 {plaintext:?} 的密文与 Python 参考实现不一致"
             );
-            assert_eq!(actual.len(), 256, "密文长度应为 256 字符");
+            assert!(
+                !actual.is_empty() && actual.len() <= 256,
+                "密文应为 1~256 字符（模数 1024 位，前导 0 可省略）"
+            );
         }
     }
 

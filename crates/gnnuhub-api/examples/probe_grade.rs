@@ -189,7 +189,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let form_ref: Vec<(&str, &str)> =
             form.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
 
-        match session.post_form_for_probe(&path, &query, &form_ref).await {
+        match session
+            .post_form_for_probe(&path, &query, &form_ref, &[])
+            .await
+        {
             Ok(body) => {
                 let n = count_items(&body);
                 println!("    HTTP 200，{} 字节，items 条数 = {n}", body.trim().len());
@@ -229,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "/cjcx/cjcx_cxDgXscj.html",
                 &[("gnmkdm", "N305005"), ("doType", "query")],
                 &form,
+                &[],
             )
             .await
         {

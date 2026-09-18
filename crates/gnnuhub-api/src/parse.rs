@@ -169,6 +169,119 @@ pub fn parse_student_info(html: &str) -> Result<StudentInfo> {
     Ok(info)
 }
 
+/// 学籍信息 JSON 接口（`xsxxwh_cxCkDgxsxx.html`）的记录字段
+///
+/// 键名规律 = 学籍页 HTML 字段 id 去掉 `col_` 前缀（2026-09 实测，
+/// 响应共 64 个顶层键）。与展示无关的信封键（`queryModel` /
+/// `userModel` / `date*` / `pageTotal` 等）不在结构体里，由 serde
+/// 忽略未知字段的默认行为处理。
+#[derive(Debug, Default, Deserialize)]
+struct RawStudentProfile {
+    /// 学号
+    #[serde(default)]
+    xh: String,
+    /// 姓名
+    #[serde(default)]
+    xm: String,
+    /// 性别（接口直接返回文本，例如「男」）
+    #[serde(default)]
+    xbm: String,
+    /// 学院
+    #[serde(default, rename = "jg_id")]
+    college: String,
+    /// 专业（干净名称，无需剥代码后缀）
+    #[serde(default)]
+    zyh_id: String,
+    /// 班级
+    #[serde(default)]
+    bh_id: String,
+    /// 入学年份（例如 `"2025"`）
+    #[serde(default)]
+    zsnddm: String,
+    /// 出生日期
+    #[serde(default)]
+    csrq: String,
+    /// 民族
+    #[serde(default)]
+    mzm: String,
+    /// 政治面貌
+    #[serde(default)]
+    zzmmm: String,
+    /// 联系地址
+    #[serde(default)]
+    txdz: String,
+    /// 辅导员
+    #[serde(default)]
+    fdyjgh: String,
+    /// 证件类型
+    #[serde(default)]
+    zjlxm: String,
+    /// 证件号码
+    #[serde(default)]
+    zjhm: String,
+    /// 培养层次（本科 / 研究生）
+    #[serde(default)]
+    pyccdm: String,
+}
+
+/// 空白文本一律视为「未提供」
+fn non_empty(raw: &str) -> Option<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// 从学籍 JSON 接口响应解析详细资料
+///
+/// 输入是 `xsxxwh_cxCkDgxsxx.html`（模块码 `N100801`）的响应。
+/// 权限过滤器的规则（2026-09 实验证实）：从请求查询串或 Referer
+/// 读取 `gnmkdm`，两者皆无则返回「无功能权限」错误页——程序化请求
+/// 显式在查询串带上 `gnmkdm=N100801` 即可通过。最小表单为
+/// `{xh_id, fromXh_id: ""}`：`xh_id_code`（32 位码）与 `xnm`/`xqm`
+/// 全部可省，无需先抓 HTML 页面换取码。
+///
+/// 相比学籍 HTML 页（[`parse_student_info`]）：
+///
+/// - **字段更多**：`fdyjgh`（辅导员）、`pyccdm`（培养层次）、
+///   `xjztdm`（学籍状态）、`xz`（学制）、`rxzf`（入学总分）等
+///   HTML 上没有的键；
+/// - **专业名干净**：`zyh_id` 直接是「数学与应用数学(非师范)」，
+///   无需像 HTML 那样剥 6 字符代码后缀。
+pub fn parse_student_profile_json(body: &str) -> Result<StudentInfo> {
+    let raw: RawStudentProfile = serde_json::from_str(body).map_err(Error::Json)?;
+
+    let mut info = StudentInfo {
+        student_id: non_empty(&raw.xh),
+        name: non_empty(&raw.xm),
+        gender: non_empty(&raw.xbm),
+        college: non_empty(&raw.college),
+        major: non_empty(&raw.zyh_id),
+        class_name: non_empty(&raw.bh_id),
+        enrollment_year: non_empty(&raw.zsnddm),
+        birthday: non_empty(&raw.csrq),
+        ethnicity: non_empty(&raw.mzm),
+        political_status: non_empty(&raw.zzmmm),
+        address: non_empty(&raw.txdz),
+        instructor: non_empty(&raw.fdyjgh),
+        identity: non_empty(&raw.pyccdm),
+        ..Default::default()
+    };
+
+    let kind = non_empty(&raw.zjlxm);
+    let number = non_empty(&raw.zjhm);
+    if kind.is_some() || number.is_some() {
+        info.document = Some(Document {
+            kind: kind.unwrap_or_default(),
+            number: number.unwrap_or_default(),
+        });
+    }
+
+    Ok(info)
+}
+
 /// 课表接口返回的顶层结构
 #[derive(Debug, Deserialize)]
 struct RawScheduleResponse {
@@ -571,6 +684,68 @@ mod tests {
         let doc = info.document.unwrap();
         assert_eq!(doc.kind, "居民身份证");
         assert_eq!(doc.number, "360100200001011234");
+    }
+
+    /// 学籍 JSON 接口解析（脱敏样例，键集对齐 2026-09 实测响应）
+    #[test]
+    fn parses_student_profile_json() {
+        let body = r#"{
+            "xh_id": "250700001", "xh": "250700001",
+            "xm": "李四", "xmpy": "Li Si", "xbm": "女",
+            "jg_id": "数学与计算机科学学院",
+            "zyh_id": "数学与应用数学(非师范)",
+            "bh_id": "数学与应用数学(非师范)2501",
+            "zsnddm": "2025", "csrq": "2007-01-02",
+            "mzm": "汉族", "zzmmm": "中国共产主义青年团团员",
+            "txdz": "江西省某市某区某街道1号",
+            "fdyjgh": "王辅导", "zjlxm": "居民身份证",
+            "zjhm": "360100200701021234", "pyccdm": "本科",
+            "xjztdm": "在读", "xz": "4", "rxzf": "514",
+            "syd": "江西省", "jg": "江西省", "zskl": "物理类",
+            "queryModel": {"currentPage": 1},
+            "userModel": {"monitor": false},
+            "date": "二○二六年九月十八日",
+            "pageTotal": 0
+        }"#;
+        let info = parse_student_profile_json(body).unwrap();
+
+        assert_eq!(info.student_id.as_deref(), Some("250700001"));
+        assert_eq!(info.name.as_deref(), Some("李四"));
+        assert_eq!(info.gender.as_deref(), Some("女"));
+        assert_eq!(info.college.as_deref(), Some("数学与计算机科学学院"));
+        assert_eq!(
+            info.major.as_deref(),
+            Some("数学与应用数学(非师范)"),
+            "JSON 的专业名是干净的，无需剥后缀"
+        );
+        assert_eq!(
+            info.class_name.as_deref(),
+            Some("数学与应用数学(非师范)2501")
+        );
+        assert_eq!(info.enrollment_year.as_deref(), Some("2025"));
+        assert_eq!(info.birthday.as_deref(), Some("2007-01-02"));
+        assert_eq!(info.ethnicity.as_deref(), Some("汉族"));
+        assert_eq!(
+            info.political_status.as_deref(),
+            Some("中国共产主义青年团团员")
+        );
+        assert_eq!(info.address.as_deref(), Some("江西省某市某区某街道1号"));
+        assert_eq!(info.instructor.as_deref(), Some("王辅导"));
+        assert_eq!(info.identity.as_deref(), Some("本科"));
+        let doc = info.document.unwrap();
+        assert_eq!(doc.kind, "居民身份证");
+        assert_eq!(doc.number, "360100200701021234");
+    }
+
+    /// 空字符串与缺失字段都应表现为「未提供」
+    #[test]
+    fn tolerates_blank_fields_in_profile_json() {
+        let body = r#"{"xh": "250700001", "xm": "李四", "zyh_id": "", "zjhm": ""}"#;
+        let info = parse_student_profile_json(body).unwrap();
+        assert_eq!(info.student_id.as_deref(), Some("250700001"));
+        assert_eq!(info.name.as_deref(), Some("李四"));
+        assert!(info.major.is_none());
+        assert!(info.document.is_none(), "证件号缺失时不应造出半份证件");
     }
 
     /// 专业名末尾的 6 位代码应被去掉

@@ -118,6 +118,28 @@
 - 认证平台「地址改为服务部署地址」这种提示与实际登录失败无必然关系。
 - `xqm` 取值是 **3（第一学期）/ 12（第二学期）**，不是 1/2。
 
+## JSON 数据源迁移（2026-09-18 实测定稿）
+
+- **正方权限过滤器规则**：从「请求查询串或 Referer」读 `gnmkdm`，
+  两者皆无 → 「无功能权限」错误页（2490/2505 字节）。程序化请求
+  在查询串显式带 `gnmkdm` 即可，**无需模拟 Referer**（浏览器 JS 里
+  裸 URL 能工作纯粹因为 Referer 自动携带页面地址里的模块码）。
+- **学籍 JSON 接口（已切换）**：POST
+  `/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801`，最小表单
+  `{xh_id, fromXh_id:""}`——32 位码与 `xnm`/`xqm` 全部可省，
+  无需抓页取码。64 键响应键名 = HTML 字段 id 去 `col_` 前缀；
+  比 HTML 多出辅导员 `fdyjgh`、培养层次 `pyccdm`、学籍状态
+  `xjztdm`、学制 `xz`、生源地 `syd`、入学总分 `rxzf` 等字段；
+  `zyh_id` 是干净专业名免剥后缀。`fetch_student_info` 走它，
+  失败回退 HTML。
+- **移动端课表接口已证伪并移除**：`xskbcxMobile_cxXsKb.html`
+  （N2154）对浏览器复刻（M1）与程序化复刻（M3）均返回字面量
+  `null`，疑似服务端失效，**别再试图调通它**。单周课表 = 整学期
+  JSON 课表 + `ClassSchedule::week_view(w)` 客户端过滤（0 额外
+  请求）；周次解析支持 `1-18周` / `7-13周(单)` / 多段逗号，不可
+  解析保守返回 true。`this_week()` 是唯一保留的 HTML 解析路径
+  （当前周次无 JSON 接口）。
+
 ## 验证码识别的现状（2026-09-18 更新）
 
 - **字库：70 条、覆盖 62 个字符（`0-9A-Za-z` 一个不缺）**
@@ -211,8 +233,9 @@
 
 ## 待办
 
-- 单周课表接口 `/kbcx/xskbcxMobile_cxXsKb.html` 未实测
-- 学籍字段仅映射 12/84，完整对照表在 `tools/js-recon/out/verification.md` 附一
+- 学籍字段扩展：JSON 源已具备 64 键，模型按需挑选（对照表
+  `tools/js-recon/out/verification.md` 附一 + 5.2 节）
+- `fetch_basic_info` / `timetable`（`xskbcx_cxRjc` 输入格式未核实）——JSON 化候选
 - **成绩查询：卡在账号数据上，不是代码上**（见下方「成绩查询接口」）
 - 界面层框架未选（用户明确表示稍后再定）
 

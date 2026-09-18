@@ -138,12 +138,18 @@ impl Session {
         self.send(&url, |req| req.query(query).form(form)).await
     }
 
-    /// 原样发一次表单 POST，供接口探测工具使用
+    /// 原样发一次表单 POST（可附自定义请求头），供接口探测工具使用
     ///
     /// 与 [`Session::post_form`] 行为一致，区别只是**公开**且允许任意
-    /// 查询串/表单体。存在的理由是：教务系统有些接口能否返回数据
-    /// 取决于一个难以离线推断的参数组合，只能靠少量实测确定；
-    /// 这类实验不应该污染正式的业务方法。
+    /// 查询串/表单体/请求头。存在的理由是：教务系统有些接口能否返回
+    /// 数据取决于难以离线推断的请求形状（参数组合、模块码、AJAX
+    /// 指纹），只能靠少量实测确定；这类实验不应该污染正式的业务方法。
+    ///
+    /// `headers` 用于模拟浏览器 AJAX 指纹（如 `Referer`、
+    /// `X-Requested-With: XMLHttpRequest`）。前端 JS 有时不把
+    /// `gnmkdm` 写进请求 URL（例如学籍信息的 `ckXsxx.js`），此时
+    /// 浏览器靠 Referer 里的页面地址携带模块码——裸请求的行为
+    /// 与浏览器并不等价，需要用它补齐差异。
     ///
     /// 仍然经过客户端节流，不会绕过 [`Client::throttled`]。
     ///
@@ -154,8 +160,17 @@ impl Session {
         path: &str,
         query: &[(&str, &str)],
         form: &[(&str, &str)],
+        headers: &[(&str, &str)],
     ) -> Result<String> {
-        self.post_form(path, query, form).await
+        let url = format!("{JWGL_BASE_URL}{path}");
+        self.send(&url, |req| {
+            let mut req = req.query(query).form(form);
+            for (name, value) in headers {
+                req = req.header(*name, *value);
+            }
+            req
+        })
+        .await
     }
 
     /// 拉取首页基本资料（姓名、身份、学院、班级、头像）
@@ -181,15 +196,37 @@ impl Session {
     /// 拉取学籍详细信息
     ///
     /// 对应 Python 版 `_get_student_info`。
+    ///
+    /// 优先走 JSON 接口（`xsxxwh_cxCkDgxsxx.html`，模块码 `N100801`）：
+    /// 比学籍 HTML 页字段更多（辅导员、培养层次等），专业名也无需剥
+    /// 代码后缀，且最小表单 `{xh_id, fromXh_id:""}` 无需先抓页面取
+    /// 32 位码。JSON 接口失败时（例如教务系统升级改变了行为）回退到
+    /// 原来的 HTML 页面解析，保证方法始终尽力返回数据。
     pub async fn fetch_student_info(&self) -> Result<StudentInfo> {
-        let html = self
-            .get(
-                "/xsxxxggl/xsgrxxwh_cxXsgrxx.html",
-                &[("gnmkdm", "N100801"), ("layout", "default")],
-            )
-            .await?;
+        let form = [("xh_id", self.student_id.as_str()), ("fromXh_id", "")];
 
-        let parsed = parse::parse_student_info(&html)?;
+        let parsed = match self
+            .post_form(
+                "/xsxxxggl/xsxxwh_cxCkDgxsxx.html",
+                &[("gnmkdm", "N100801")],
+                &form,
+            )
+            .await
+            .and_then(|body| parse::parse_student_profile_json(&body))
+        {
+            Ok(info) => info,
+            Err(error) => {
+                tracing::warn!(error = %error, "学籍 JSON 接口失败，回退到 HTML 页面解析");
+                let html = self
+                    .get(
+                        "/xsxxxggl/xsgrxxwh_cxXsgrxx.html",
+                        &[("gnmkdm", "N100801"), ("layout", "default")],
+                    )
+                    .await?;
+                parse::parse_student_info(&html)?
+            }
+        };
+
         let mut state = self.state.lock().await;
         state.info.merge_from(parsed.clone());
         Ok(parsed)
@@ -220,73 +257,65 @@ impl Session {
     /// 获取指定学年学期的课表
     ///
     /// `week` 为 `None` 时返回整学期课表（对应原实现的 `week = 0`），
-    /// 传入具体周次则只返回该周的课表（走移动端接口）。
+    /// 传入具体周次则返回该周的课表视图。
     ///
     /// 对应 Python 版 `get_class_schedule`。
+    ///
+    /// # 单周课表的实现说明
+    ///
+    /// 历史版本曾走「学生课表查询（按周次）」的移动端接口
+    /// （`xskbcxMobile_cxXsKb.html`），但 2026-09 实测该接口对合法
+    /// 请求也返回字面量 `null`——浏览器请求复刻（带 Referer 与 AJAX
+    /// 头）与程序化复刻（带模块码）在已访问 Zccx 页的同会话内均为
+    /// null，疑似服务端问题。因此改为**整学期课表 + 客户端周次过滤**
+    /// （[`ClassSchedule::week_view`]）：0 次额外请求、结果走同一份
+    /// 缓存，且不再依赖任何行为不明的远程接口。
     pub async fn class_schedule(
         &self,
         term: AcademicTerm,
         week: Option<u8>,
     ) -> Result<ClassSchedule> {
-        // 整学期课表可以缓存；单周课表不缓存
-        if week.is_none() {
+        // 整学期课表缓存；单周视图从同一份缓存派生，同样不额外打接口
+        let full = {
             let state = self.state.lock().await;
-            if let Some(cached) = state.schedules.get(&term) {
-                return Ok(cached.clone());
+            match state.schedules.get(&term) {
+                Some(cached) => cached.clone(),
+                None => {
+                    drop(state);
+                    self.fetch_full_schedule(term).await?
+                }
             }
-        }
-
-        let (path, gnmkdm, form): (&str, &str, Vec<(&str, &str)>) = match week {
-            None => (
-                "/kbcx/xskbcx_cxXsgrkb.html",
-                "N2151",
-                vec![
-                    ("xnm", ""),
-                    ("xqm", ""),
-                    ("kzlx", "ck"),
-                    ("xsdm", ""),
-                    ("kclbdm", ""),
-                ],
-            ),
-            Some(_) => (
-                "/kbcx/xskbcxMobile_cxXsKb.html",
-                "N2154",
-                vec![
-                    ("xnm", ""),
-                    ("xqm", ""),
-                    ("zs", ""),
-                    ("doType", "app"),
-                    ("kblx", "1"),
-                    ("xh", ""),
-                ],
-            ),
         };
 
+        Ok(match week {
+            None => full,
+            Some(week) => full.week_view(week),
+        })
+    }
+
+    /// 从教务系统拉取整学期课表并写入缓存
+    async fn fetch_full_schedule(&self, term: AcademicTerm) -> Result<ClassSchedule> {
         // 学年学期参数需要动态填充
         let year_str = term.as_xnm();
         let xqm_str = term.as_xqm().to_string();
-        let week_str = week.map(|w| w.to_string()).unwrap_or_default();
-        let form: Vec<(&str, &str)> = form
-            .into_iter()
-            .map(|(k, v)| match k {
-                "xnm" => (k, year_str.as_str()),
-                "xqm" => (k, xqm_str.as_str()),
-                "zs" => (k, week_str.as_str()),
-                _ => (k, v),
-            })
-            .collect();
+        let form = [
+            ("xnm", year_str.as_str()),
+            ("xqm", xqm_str.as_str()),
+            ("kzlx", "ck"),
+            ("xsdm", ""),
+            ("kclbdm", ""),
+        ];
 
-        let body = self.post_form(path, &[("gnmkdm", gnmkdm)], &form).await?;
+        let body = self
+            .post_form("/kbcx/xskbcx_cxXsgrkb.html", &[("gnmkdm", "N2151")], &form)
+            .await?;
 
         let (mut schedule, info) = parse::parse_class_schedule(&body)?;
         parse::attach_academic_term(&mut schedule, term);
 
-        if week.is_none() {
-            let mut state = self.state.lock().await;
-            state.schedules.insert(term, schedule.clone());
-            state.info.merge_from(info);
-        }
-
+        let mut state = self.state.lock().await;
+        state.schedules.insert(term, schedule.clone());
+        state.info.merge_from(info);
         Ok(schedule)
     }
 
@@ -330,6 +359,12 @@ impl Session {
     /// 获取当前教学周
     ///
     /// 对应 Python 版 `this_week`。
+    ///
+    /// 注意：本方法是**唯一保留 HTML 解析**的路径。当前周次没有
+    /// 已知的 JSON 接口可用——按周次查询课表的移动端接口已实测失效
+    /// （见 [`Session::class_schedule`]），而整学期课表响应里不携带
+    /// 「今天是第几周」的信息，只能从 Zccx 页面 `#zs` 下拉框的选中
+    /// 项读取。结果会缓存，整个会话只解析一次。
     pub async fn this_week(&self) -> Result<u8> {
         {
             let state = self.state.lock().await;

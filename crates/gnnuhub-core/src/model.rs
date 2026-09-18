@@ -115,6 +115,112 @@ pub struct ClassTime {
     pub periods: PeriodRange,
 }
 
+/// 周次区间的奇偶修饰
+///
+/// 教务系统用 `(单)` / `(双)` 表示区间内只上单（奇数）周或双（偶数）周。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WeekParity {
+    /// 不区分奇偶，每周都上
+    All,
+    /// 单周（奇数周）
+    Odd,
+    /// 双周（偶数周）
+    Even,
+}
+
+/// 一段连续的周次区间（含奇偶修饰）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WeekRange {
+    start: u8,
+    end: u8,
+    parity: WeekParity,
+}
+
+impl WeekRange {
+    /// 判断某一周是否落在本区间内
+    fn matches(self, week: u8) -> bool {
+        (self.start..=self.end).contains(&week)
+            && match self.parity {
+                WeekParity::All => true,
+                WeekParity::Odd => week % 2 == 1,
+                WeekParity::Even => week % 2 == 0,
+            }
+    }
+}
+
+/// 解析周次描述文本
+///
+/// 教务系统 `zcd` 字段的已知格式（均来自真实响应）：
+///
+/// - `"1-18周"` — 连续区间
+/// - `"7-13周(单)"` — 区间内只上奇数周
+/// - 多段以逗号分隔：`"1-8周(双),10-16周"`（全角逗号同样兼容）
+///
+/// 返回 `None` 表示文本为空或不符合已知格式；调用方应保守处理
+/// （当作「覆盖任意周」），宁可多显示一门课也不要漏掉。
+fn parse_week_ranges(text: &str) -> Option<Vec<WeekRange>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    let mut ranges = Vec::new();
+    for segment in text.split([',', '，']) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+
+        // 奇偶修饰藏在括号里：`(单)` / `（双）`
+        let (body, parity) = match segment.find(['(', '（']) {
+            Some(idx) => {
+                let tail = &segment[idx..];
+                let parity = if tail.contains('单') {
+                    WeekParity::Odd
+                } else if tail.contains('双') {
+                    WeekParity::Even
+                } else {
+                    // 未知修饰词，整体视为不可解析
+                    return None;
+                };
+                (&segment[..idx], parity)
+            }
+            None => (segment, WeekParity::All),
+        };
+
+        // 去掉「周」「第」等装饰字符后解析数字区间
+        let body = body.replace(['周', '第'], "");
+        let (start, end) = match body.trim().split_once('-') {
+            Some((a, b)) => (a.trim().parse().ok()?, b.trim().parse().ok()?),
+            None => {
+                // 「第17周」这类单周次写法
+                let v = body.trim().parse().ok()?;
+                (v, v)
+            }
+        };
+        ranges.push(WeekRange { start, end, parity });
+    }
+
+    if ranges.is_empty() {
+        None
+    } else {
+        Some(ranges)
+    }
+}
+
+impl ClassTime {
+    /// 判断该排课是否覆盖给定的教学周
+    ///
+    /// 依据 [`Self::weeks`] 的原文解析；文本不可解析时**保守返回
+    /// `true`**——单周过滤服务于展示场景，多显示一门课的代价远小于
+    /// 漏掉一门课。
+    pub fn covers_week(&self, week: u8) -> bool {
+        parse_week_ranges(&self.weeks)
+            .map(|ranges| ranges.iter().any(|r| r.matches(week)))
+            .unwrap_or(true)
+    }
+}
+
 /// 一门课程的一次具体排课
 ///
 /// 同一门课可能一周上多次，或不同周次在不同教室，
@@ -185,6 +291,30 @@ impl ClassSchedule {
     /// 课程总数
     pub fn course_count(&self) -> usize {
         self.courses.len()
+    }
+
+    /// 提取指定教学周的课表视图
+    ///
+    /// 以整学期课表为基础做客户端过滤：只保留当周有课的排课条目，
+    /// 当周没有任何排课的课程不会出现在结果里。配合整学期课表接口
+    /// 使用时，单周视图 0 次额外请求即可获得，也不依赖任何按周查询
+    /// 的远程接口。
+    pub fn week_view(&self, week: u8) -> ClassSchedule {
+        let mut view = ClassSchedule {
+            academic_term: self.academic_term,
+            courses: BTreeMap::new(),
+        };
+        for (name, entries) in &self.courses {
+            let kept: Vec<CourseEntry> = entries
+                .iter()
+                .filter(|e| e.time.covers_week(week))
+                .cloned()
+                .collect();
+            if !kept.is_empty() {
+                view.courses.insert(name.clone(), kept);
+            }
+        }
+        view
     }
 }
 
@@ -497,5 +627,121 @@ mod tests {
     fn unknown_period_range_is_default() {
         assert_eq!(PeriodRange::default(), PeriodRange::UNKNOWN);
         assert_eq!(PeriodRange::default().start, 0);
+    }
+
+    /// 构造仅指定周次文本的 ClassTime，方便逐条验证解析规则
+    fn time_with_weeks(weeks: &str) -> ClassTime {
+        ClassTime {
+            weeks: weeks.to_string(),
+            weekday: String::new(),
+            periods: PeriodRange::default(),
+        }
+    }
+
+    /// 周次文本解析：连续区间
+    #[test]
+    fn covers_week_range() {
+        let t = time_with_weeks("1-18周");
+        assert!(t.covers_week(1));
+        assert!(t.covers_week(9));
+        assert!(t.covers_week(18));
+        assert!(!t.covers_week(19));
+        assert!(!t.covers_week(0));
+    }
+
+    /// 周次文本解析：单双周修饰
+    #[test]
+    fn covers_week_odd_even() {
+        let odd = time_with_weeks("7-13周(单)");
+        assert!(odd.covers_week(7));
+        assert!(odd.covers_week(13));
+        assert!(!odd.covers_week(8), "双周不应命中(单)区间");
+
+        let even = time_with_weeks("1-16周(双)");
+        assert!(even.covers_week(2));
+        assert!(even.covers_week(16));
+        assert!(!even.covers_week(1), "奇数周不应命中(双)区间");
+    }
+
+    /// 周次文本解析：多段与全角逗号、单周次写法
+    #[test]
+    fn covers_week_multi_segment() {
+        let multi = time_with_weeks("1-8周,10-16周");
+        assert!(multi.covers_week(5));
+        assert!(!multi.covers_week(9), "空档周不应命中");
+        assert!(multi.covers_week(10));
+
+        let fullwidth = time_with_weeks("1-8周，10-16周");
+        assert!(fullwidth.covers_week(5));
+        assert!(!fullwidth.covers_week(9));
+
+        let single = time_with_weeks("第17周");
+        assert!(single.covers_week(17));
+        assert!(!single.covers_week(16));
+    }
+
+    /// 周次文本不可解析时保守当作覆盖
+    #[test]
+    fn covers_week_defaults_to_true_when_unparsable() {
+        assert!(time_with_weeks("").covers_week(3), "空文本应保守命中");
+        assert!(
+            time_with_weeks("第?周").covers_week(3),
+            "畸形文本应保守命中"
+        );
+        assert!(
+            time_with_weeks("1-8周(上机)").covers_week(3),
+            "未知括号修饰词应保守命中"
+        );
+    }
+
+    /// week_view 只保留当周有课的条目，当周无课的课程整体消失
+    #[test]
+    fn week_view_filters_by_week() {
+        let mk = |name: &str, weeks: &str| {
+            (
+                name.to_string(),
+                vec![CourseEntry {
+                    position: String::new(),
+                    teachers: vec![],
+                    time: ClassTime {
+                        weeks: weeks.to_string(),
+                        weekday: "星期一".to_string(),
+                        periods: PeriodRange { start: 1, end: 2 },
+                    },
+                    classes: vec![],
+                    building: String::new(),
+                    nature: String::new(),
+                    category: String::new(),
+                    exam_mode: String::new(),
+                    campus: String::new(),
+                    credit: 0.0,
+                }],
+            )
+        };
+
+        let schedule = ClassSchedule {
+            academic_term: Some(AcademicTerm::first(2025)),
+            courses: BTreeMap::from([
+                mk("数学分析", "1-18周"),
+                mk("大学英语", "7-13周(单)"),
+                mk("体育", "3-4周"),
+            ]),
+        };
+
+        // 第 7 周：数学分析命中、大学英语(单周)命中、体育已结束
+        let view = schedule.week_view(7);
+        assert_eq!(view.course_count(), 2);
+        assert_eq!(view.course("数学分析").len(), 1);
+        assert_eq!(view.course("大学英语").len(), 1);
+        assert!(view.course("体育").is_empty());
+
+        // 第 4 周：数学分析命中、大学英语(单周)不命中、体育进行中
+        let view = schedule.week_view(4);
+        assert_eq!(view.course_count(), 2);
+        assert!(view.course("大学英语").is_empty());
+        assert_eq!(view.course("体育").len(), 1);
+
+        // 视图继承学期信息
+        assert_eq!(view.academic_term, Some(AcademicTerm::first(2025)));
     }
 }
