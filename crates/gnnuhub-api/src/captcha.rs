@@ -84,7 +84,9 @@ impl Captcha {
     /// 从接口响应构造
     pub fn from_response(resp: CaptchaResponse) -> Result<Self> {
         if resp.uid.is_empty() || resp.content.is_empty() {
-            return Err(Error::CaptchaRequiresManualInput);
+            return Err(Error::CaptchaResponse(
+                "接口未返回 uid 或图片内容，可能是风控拦截或接口变更".to_string(),
+            ));
         }
         Ok(Self {
             uid: resp.uid,

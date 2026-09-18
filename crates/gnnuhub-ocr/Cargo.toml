@@ -8,14 +8,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[features]
-# 启用基于 tesseract 的自动识别引擎。
-#
-# 默认关闭：它依赖系统安装 tesseract 二进制与 eng 语言包，
-# 开启后 crate 不再是「纯 Rust」，因此改为显式选择。
-# 打开方式：`cargo build -p gnnuhub-ocr --features tesseract`
-tesseract = []
-
 [dependencies]
 gnnuhub-core.workspace = true
 thiserror.workspace = true

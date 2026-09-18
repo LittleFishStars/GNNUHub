@@ -8,21 +8,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[features]
-# 透传 OCR 的 tesseract 引擎开关，方便 workspace 顶层一次性启用：
-# `cargo test --features tesseract`
-tesseract = ["gnnuhub-ocr/tesseract"]
-
-# `ocr_bench` 直接用了 `gnnuhub_ocr::TesseractOcr`，只有在启用 tesseract
-# 时才能编译。用 `required-features` 声明依赖，这样默认 feature 下
-# `cargo test` 不会因为它而失败。
-#
-# 注意 `ocr_verify` **没有**这个限制：它默认走位图查表，tesseract 只是
-# `#[cfg]` 掉的可选对照，所以默认构建下也能跑。
-[[example]]
-name = "ocr_bench"
-required-features = ["tesseract"]
-
 [dependencies]
 gnnuhub-core.workspace = true
 gnnuhub-crypto.workspace = true

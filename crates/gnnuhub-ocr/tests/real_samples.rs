@@ -57,7 +57,7 @@ fn recognizes_all_samples_with_embedded_library() {
     let engine = gnnuhub_ocr::BitmapOcr::embedded().expect("内嵌字库");
     let mut ok = 0usize;
     for f in &files {
-        if let Ok(code) = engine.recognize_image(&encode(f)) {
+        if let Ok(code) = engine.recognize(&encode(f)) {
             assert_eq!(code.chars().count(), 4, "{} 应识别出 4 个字符", f.display());
             ok += 1;
         }

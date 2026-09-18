@@ -53,7 +53,7 @@
 //!
 //! # 识别引擎
 //!
-//! 默认用位图查表（内嵌字库，65 字形 / 59 字符）。
+//! 只有位图查表（内嵌字库）。
 //!
 //! 每轮把四个字形的**匹配质量**一并打印（`=` 精确命中、`~N` 模糊命中且
 //! 汉明距离为 N、`!` 未命中），这样失败轮次能立刻看出是「字库缺条目」
@@ -214,20 +214,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 直接加载内嵌字库，拿到引用以便逐字形查表
     let lib = gnnuhub_ocr::embedded_library()?;
     println!("字库：{} 个字形", lib.len());
-
-    // 可选：tesseract 对照。默认构建下这段会被 cfg 掉。
-    //
-    // 这里只做可用性探测并打印，不参与判定——位图查表命中率远高于
-    // tesseract，把两者混在一起只会让「谁错了」变得难以归因。
-    #[cfg(feature = "tesseract")]
-    {
-        let tess = gnnuhub_ocr::TesseractOcr::new();
-        if tess.is_available() {
-            println!("对照引擎：tesseract 可用（本工具默认不采用其结果）");
-        } else {
-            println!("对照引擎：tesseract 未安装");
-        }
-    }
 
     let client = Client::with_defaults()?;
     println!(

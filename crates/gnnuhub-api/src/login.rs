@@ -600,13 +600,21 @@ pub async fn fetch_captcha(client: &Client) -> Result<Captcha> {
 /// 执行完整的带重试登录流程
 ///
 /// 与 Python 版 `login()` 的差异：重试次数由配置决定，不再无限递归。
+///
+/// # 验证码识别失败时的行为
+///
+/// 识别器未命中字库时会返回错误，此处**直接向上抛**，不消耗重试次数。
+/// 这是因为识别失败是本地问题（字库缺条目），与服务端无关：重试只会
+/// 再取一张同样可能不认识的图，纯属浪费请求。
+///
+/// 真正需要重试的是服务端判定「验证码错误」——那说明这张图被读错了，
+/// 换一张才有意义。
 pub async fn login_with_retry(
     client: &Client,
     student_id: &str,
     password: &str,
     service: &str,
     ocr: &dyn OcrEngine,
-    interactive: Option<&gnnuhub_ocr::InteractiveFn>,
 ) -> Result<LoginOutcome> {
     let max_attempts = client.config().max_login_retries;
     let encrypted_password = gnnuhub_crypto::encode_password(password);
@@ -615,7 +623,7 @@ pub async fn login_with_retry(
         let captcha = fetch_captcha(client).await?;
         tracing::debug!("第 {attempt} 次尝试登录，验证码 uid = {}", captcha.uid);
 
-        let code = ocr.recognize(&captcha.image, interactive)?;
+        let code = ocr.recognize(&captcha.image)?;
 
         match try_login(
             client,

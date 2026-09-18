@@ -48,9 +48,9 @@ pub enum Error {
         attempts: u32,
     },
 
-    /// 验证码需要人工输入，但当前环境无法交互
-    #[error("需要人工输入验证码，但识别器未提供交互能力")]
-    CaptchaRequiresManualInput,
+    /// 验证码接口返回了空 uid 或空图片
+    #[error("验证码接口响应异常: {0}")]
+    CaptchaResponse(String),
 
     /// 会话未认证或已过期
     #[error("会话未认证或已过期，请重新登录")]

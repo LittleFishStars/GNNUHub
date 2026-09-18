@@ -227,26 +227,24 @@ impl Client {
     /// - `student_id`：学号
     /// - `password`：明文密码（内部会做 RSA 加密）
     /// - `ocr`：验证码识别器
-    /// - `interactive`：需要人工输入验证码时使用的回调
     ///
     /// # 错误
     ///
     /// - [`Error::InvalidCredentials`]：学号或密码错误
     /// - [`Error::LoginRetriesExhausted`]：重试次数耗尽
     /// - [`Error::Unauthenticated`]：票据交换后未获得有效会话
+    /// - [`Error::TicketMissing`]：账号已被锁定，重试有害
     ///
     /// # 示例
     ///
     /// ```no_run
     /// use gnnuhub_api::Client;
-    /// use gnnuhub_ocr::FailoverOcr;
+    /// use gnnuhub_ocr::BitmapOcr;
     ///
     /// async fn run() -> Result<(), Box<dyn std::error::Error>> {
     ///     let client = Client::with_defaults()?;
-    ///     let ocr = FailoverOcr::recommended()?;
-    ///     let session = client
-    ///         .login(2500000001, "password", &ocr, None)
-    ///         .await?;
+    ///     let ocr = BitmapOcr::embedded()?;
+    ///     let session = client.login(2500000001, "password", &ocr).await?;
     ///     println!("登录成功: {}", session.student_id());
     ///     Ok(())
     /// }
@@ -256,21 +254,13 @@ impl Client {
         student_id: u64,
         password: &str,
         ocr: &dyn gnnuhub_ocr::OcrEngine,
-        interactive: Option<&gnnuhub_ocr::InteractiveFn>,
     ) -> Result<crate::session::Session> {
         // 教务系统的 service 参数固定指向教务系统首页
         let service = format!("{JWGL_BASE_URL}/");
         let student_id_str = student_id.to_string();
 
-        let outcome = crate::login::login_with_retry(
-            self,
-            &student_id_str,
-            password,
-            &service,
-            ocr,
-            interactive,
-        )
-        .await?;
+        let outcome =
+            crate::login::login_with_retry(self, &student_id_str, password, &service, ocr).await?;
 
         let (tgt, ticket) = match outcome {
             crate::login::LoginOutcome::Success { tgt, ticket } => (tgt, ticket),

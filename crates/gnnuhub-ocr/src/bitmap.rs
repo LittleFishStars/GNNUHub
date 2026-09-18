@@ -19,11 +19,15 @@
 //! 60 张样本（240 个字形）已得到 65 个唯一位图，Chao1 估计总体约 67 个，
 //! 采样覆盖度 96.7%。
 //!
-//! # 与 tesseract 的关系
+//! # 为什么不再需要其他识别方式
 //!
-//! tesseract 是通用 OCR，对这类抗锯齿彩色验证码只能到 78%，且对放大倍数
-//! 敏感（`0024.png` 只在 scale 4~8 窗口内正确）。位图查表在字库覆盖到的
-//! 范围内接近 100%，因此**优先用本引擎，tesseract 作为兜底**。
+//! 早期还挂过 tesseract 作为兜底。但真值验证显示本引擎已达 **100%**
+//! （72/72），而 tesseract 对这类抗锯齿彩色验证码只有 78%，且对放大倍数
+//! 敏感（`0024.png` 只在 scale 4~8 窗口内正确）。
+//!
+//! 一个更差的兜底只会引入「猜错」这一新的失败模式：猜错的字符会被拿去
+//! 登录，白耗一次服务端尝试。所以字库未命中时**直接报错**，错误信息里
+//! 带上真实的宽高与位串，便于事后补库。
 //!
 //! # 字库格式
 //!
@@ -47,7 +51,7 @@ use base64::Engine as _;
 use gnnuhub_core::{Error, Result};
 use image::DynamicImage;
 
-use crate::{InteractiveFn, OcrEngine, decode_image, validate_captcha_format};
+use crate::{OcrEngine, decode_image, validate_captcha_format};
 
 // 二值化判据：**非纯白即墨迹**
 //
@@ -276,9 +280,18 @@ impl BitmapOcr {
 
     /// 对单张图片做识别，返回 4 个字符
     ///
-    /// 与 [`OcrEngine::recognize`] 的区别是这里不做人工回退，失败就返回
-    /// 具体原因，便于诊断。
-    pub fn recognize_image(&self, image_base64: &str) -> Result<String> {
+    /// 逐字形先精确查表，未命中再按 [`BitmapOcr::with_fuzzy_distance`] 做
+    /// 模糊匹配（默认距离 2）。两者都落空即返回错误。
+    ///
+    /// 模糊匹配不是「另一种识别方式」——它针对的是同一字符在亚像素定位下
+    /// 的 1~3 像素抖动，最终仍落到**同一个字符**上。
+    ///
+    /// # 错误
+    ///
+    /// **不做任何猜测**：未命中时错误信息里带上真实的宽高与**完整位串**，
+    /// 直接复制即可补进字库。之所以不截断位串，是因为截断后还得重新
+    /// 提取一遍才能知道缺什么。
+    pub fn recognize(&self, image_base64: &str) -> Result<String> {
         let img = decode_image(image_base64)?;
         let glyphs = extract_glyphs(&img)?;
         if glyphs.len() != 4 {
@@ -298,31 +311,28 @@ impl BitmapOcr {
                         .map(|(c, _)| c)
                 })
                 .ok_or_else(|| {
+                    // 位串分行输出，直接粘进 JSON 的 rows 就能用
+                    let rows: String = g
+                        .bits
+                        .as_bytes()
+                        .chunks(g.w as usize)
+                        .map(|c| format!("\n      \"{}\",", std::str::from_utf8(c).unwrap_or("")))
+                        .collect();
                     Error::Image(format!(
-                        "字形 {}x{} 不在字库中（位串 {}）",
-                        g.w,
-                        g.h,
-                        &g.bits[..g.bits.len().min(32)]
+                        "字形 {}x{} 不在字库中，未命中位串（可直接补进 bitmap_lib.json 的 rows）：{rows}",
+                        g.w, g.h
                     ))
                 })?;
             out.push(ch);
         }
+        validate_captcha_format(&out)?;
         Ok(out)
     }
 }
 
 impl OcrEngine for BitmapOcr {
-    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
-        match self.recognize_image(image_base64) {
-            Ok(code) => {
-                validate_captcha_format(&code)?;
-                Ok(code)
-            }
-            Err(e) => {
-                tracing::debug!("位图查表识别失败（{e}），尝试人工输入");
-                crate::ManualOcr::new().recognize(image_base64, interactive)
-            }
-        }
+    fn recognize(&self, image_base64: &str) -> Result<String> {
+        Self::recognize(self, image_base64)
     }
 
     fn name(&self) -> &'static str {
@@ -620,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn recognize_image_reports_missing_glyph() {
+    fn recognize_reports_missing_glyph() {
         let mut img = image::RgbImage::from_pixel(100, 25, image::Rgb([255, 255, 255]));
         for x0 in [5u32, 25, 45, 65] {
             for y in 8..20 {
@@ -631,7 +641,7 @@ mod tests {
         }
         let engine = BitmapOcr::new(tiny_lib());
         let err = engine
-            .recognize_image(&encode_png(&DynamicImage::ImageRgb8(img)))
+            .recognize(&encode_png(&DynamicImage::ImageRgb8(img)))
             .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("不在字库中"), "应提示字形缺失，实际: {msg}");
@@ -693,9 +703,7 @@ mod tests {
         let json = format!("{{\"entries\":[{entries}]}}");
 
         let engine = BitmapOcr::new(BitmapLibrary::from_json(&json).expect("字库"));
-        let code = engine
-            .recognize_image(&encode_png(&dynimg))
-            .expect("应识别成功");
+        let code = engine.recognize(&encode_png(&dynimg)).expect("应识别成功");
         assert_eq!(code, "LJLJ");
     }
 }

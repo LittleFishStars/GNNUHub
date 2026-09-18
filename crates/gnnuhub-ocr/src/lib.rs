@@ -1,4 +1,4 @@
-//! 验证码识别抽象层
+//! 验证码识别
 //!
 //! 实验表明赣南师范大学统一身份认证平台的验证码具有以下特征：
 //!
@@ -11,41 +11,40 @@
 //!
 //! 由于字符颜色随机，识别前必须先丢弃颜色信息。
 //!
-//! 更进一步：**字形渲染是确定性的** —— 同一 (字符, 字号) 组合在不同图片、
-//! 不同颜色下产生逐像素相同的点阵。因此识别可以退化为位图查表，
-//! 准确率上限只取决于字库覆盖度。详见 [`bitmap`] 模块。
+//! # 只有一条识别路径：位图查表
 //!
-//! # 可插拔设计
+//! **字形渲染是确定性的** —— 同一 (字符, 字号) 组合在不同图片、不同颜色下
+//! 产生逐像素相同的点阵。既然渲染确定，识别就退化成查表，
+//! **准确率上限只取决于字库覆盖度**，与分类器精度无关。
 //!
-//! 识别器通过 [`OcrEngine`] trait 抽象，上层登录逻辑只依赖该 trait，
-//! 因此可以自由替换实现：
+//! 实测真值验证 **72/72 = 100%**（见 `examples/ocr_verify.rs`）。
+//! 因此这里不再保留通用 OCR（tesseract）与人工输入兜底：
+//! 查表已经打满，别的路径只会引入「猜错」这一新的失败模式。
 //!
-//! - [`BitmapOcr`]：**推荐**。位图查表，在字库覆盖范围内接近 100%
-//! - [`ManualOcr`]：不做识别，把图片交给调用方人工输入
-//! - [`FailoverOcr`]：包一层自动回退到人工输入；
-//!   [`FailoverOcr::recommended`] 给出推荐的默认组合
-//! - `TesseractOcr`（feature `tesseract`）：调用外部 tesseract，
-//!   作为字库缺条目时的兜底
-//! - 云打码服务：网络调用第三方识别接口
+//! # 未命中时的行为：报错，绝不猜
+//!
+//! 字库是采样得来的，必然存在未收录字形。此时 [`BitmapOcr`] **直接报错**，
+//! 并把真实的宽高与位串带在错误信息里，便于事后补进字库。
+//!
+//! 之所以不让通用 OCR 兜底：拿一个猜出来的字符去登录，会白耗一次服务端
+//! 尝试（且可能推进锁定计数），而报错是零成本的。**宁可报错也不猜。**
+//!
+//! 模糊匹配（汉明距离 ≤2）仍然保留，但它不是「另一种方式」——它针对的是
+//! 同一字符在亚像素定位下的 1~3 像素抖动，最终落到**同一个字符**上。
 //!
 //! # 示例
 //!
 //! ```no_run
-//! use gnnuhub_ocr::{InteractiveFn, ManualOcr, OcrEngine};
+//! use gnnuhub_ocr::{BitmapOcr, OcrEngine};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let engine = ManualOcr::new();
+//!     let engine = BitmapOcr::embedded()?;
 //!     // 实际使用时把接口返回的 base64 图片传进来
 //!     let base64_image = "data:image/png;base64,iVBORw0KGgo=";
-//!
-//!     // 交互回调：界面层在这里展示图片并取得用户输入
-//!     let callback: &InteractiveFn = &|_image: &str| {
-//!         // 真实场景中把图片交给界面渲染，这里直接返回示例值
-//!         Ok(Some("aB3d".to_string()))
-//!     };
-//!
-//!     let result = engine.recognize(base64_image, Some(callback))?;
-//!     assert_eq!(result, "aB3d");
+//!     match engine.recognize(base64_image) {
+//!         Ok(code) => println!("识别结果: {code}"),
+//!         Err(e) => eprintln!("未命中字库（不猜，直接放弃本轮）: {e}"),
+//!     }
 //!     Ok(())
 //! }
 //! ```
@@ -58,17 +57,9 @@ pub mod bitmap;
 
 pub use bitmap::{BitmapLibrary, BitmapOcr, EMBEDDED_LIBRARY_JSON, GlyphEntry, embedded_library};
 
-#[cfg(feature = "tesseract")]
-pub mod tesseract;
-
-#[cfg(feature = "tesseract")]
-pub use tesseract::TesseractOcr;
-
 /// 验证码识别引擎
 ///
 /// 实现者需要把 base64 编码的图片转换为 4 位字符。
-/// `interactive` 参数提供给需要人工介入的实现使用；纯自动的
-/// 实现可以忽略它。
 pub trait OcrEngine: Send + Sync {
     /// 识别验证码
     ///
@@ -76,24 +67,16 @@ pub trait OcrEngine: Send + Sync {
     ///
     /// - `image_base64`：接口返回的图片，可能是 `data:image/png;base64,`
     ///   前缀的 data URL，也可能是裸 base64
-    /// - `interactive`：可选的交互回调。需要人工输入时调用它，
-    ///   传入可展示给用户的图片（data URL），返回用户输入的文本
     ///
     /// # 错误
     ///
-    /// 当实现无法完成识别（例如需要人工输入但没有提供回调）时，
-    /// 返回 [`Error::CaptchaRequiresManualInput`]。
-    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String>;
+    /// 实现无法识别该图片时返回错误。**不允许猜**：宁可报错也不给出
+    /// 一个可能错误的字符，因为错误字符会白耗一次登录尝试。
+    fn recognize(&self, image_base64: &str) -> Result<String>;
 
     /// 识别器的可读名称，用于日志与诊断
     fn name(&self) -> &'static str;
 }
-
-/// 人工输入回调的类型别名
-///
-/// 接收验证码图片的 data URL，返回用户输入的文本。
-/// 回调返回 `Ok(None)` 表示用户取消。
-pub type InteractiveFn = dyn Fn(&str) -> Result<Option<String>> + Send + Sync;
 
 /// 把可能的 data URL 前缀剥离，得到裸 base64
 pub fn strip_data_url_prefix(input: &str) -> &str {
@@ -118,186 +101,6 @@ pub fn decode_image(input: &str) -> Result<DynamicImage> {
         .map_err(|e| Error::Image(format!("base64 解码失败: {e}")))?;
 
     image::load_from_memory(&bytes).map_err(|e| Error::Image(format!("图片解析失败: {e}")))
-}
-
-/// 手动输入识别器
-///
-/// 不执行任何自动识别，而是把验证码图片通过回调交给调用方
-/// （通常是界面层），由用户肉眼识别后输入。
-///
-/// 这是默认实现，适合在自动识别尚未就绪时打通整条登录链路。
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ManualOcr;
-
-impl ManualOcr {
-    /// 创建手动识别器
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl OcrEngine for ManualOcr {
-    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
-        let callback = interactive.ok_or(Error::CaptchaRequiresManualInput)?;
-
-        // 规范化成 data URL 形式再交给界面层，避免前缀缺失导致渲染失败
-        let data_url = if image_base64.starts_with("data:") {
-            image_base64.to_string()
-        } else {
-            format!("data:image/png;base64,{image_base64}")
-        };
-
-        let input = callback(&data_url)?.ok_or(Error::CaptchaRequiresManualInput)?;
-        let cleaned: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-
-        validate_captcha_format(&cleaned)?;
-        Ok(cleaned)
-    }
-
-    fn name(&self) -> &'static str {
-        "manual"
-    }
-}
-
-/// 带自动回退的识别器
-///
-/// 把任意识别器包一层：先尝试自动识别，**只要它失败就退回人工输入**。
-///
-/// # 为什么要有这一层
-///
-/// 自动识别的失败是常态而非异常：tesseract 可能没装、两个预处理配置
-/// 可能读不出共识、图片可能被服务端换成新的干扰样式。这些情况都不该让
-/// 整个登录流程崩掉——登录本来就有重试，最坏退化成人工输入即可。
-///
-/// # 回退的错误范围
-///
-/// **所有**错误都会触发回退，包括：
-///
-/// - [`Error::CaptchaRequiresManualInput`]：识别器自己就放弃了
-/// - [`Error::InvalidCaptcha`]：识别结果不是合法验证码
-/// - [`Error::Config`] / [`Error::Image`]：tesseract 缺失或调用失败
-///
-/// 唯一不回退的情形是**回调本身也失败**（用户取消或输入非法），
-/// 此时错误如实向上抛。
-///
-/// # 示例
-///
-/// ```no_run
-/// # #[cfg(feature = "tesseract")]
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use gnnuhub_ocr::{FailoverOcr, ManualOcr, OcrEngine, TesseractOcr};
-///
-/// // 自动识别失败时交给界面层弹输入框
-/// let engine = FailoverOcr::new(Box::new(TesseractOcr::new()), ManualOcr::new());
-/// # let _ = engine;
-/// # Ok(())
-/// # }
-/// # #[cfg(not(feature = "tesseract"))]
-/// # fn main() {}
-/// ```
-pub struct FailoverOcr {
-    /// 优先使用的自动识别器
-    primary: Box<dyn OcrEngine>,
-    /// 自动识别失败时使用的人工识别器
-    fallback: ManualOcr,
-}
-
-impl FailoverOcr {
-    /// 用给定的主识别器与人工兜底构造
-    pub fn new(primary: Box<dyn OcrEngine>, fallback: ManualOcr) -> Self {
-        Self { primary, fallback }
-    }
-
-    /// 构造推荐的识别链：位图查表 -> 人工输入
-    ///
-    /// 位图查表基于「服务端字形渲染是确定性的」这一事实，在字库覆盖到的
-    /// 范围内接近 100%，因此作为首选。未能命中时退回人工输入。
-    ///
-    /// 若启用了 `tesseract` feature，可改用 `recommended_with_tesseract`
-    /// 在两者之间再加一层。
-    pub fn recommended() -> Result<Self> {
-        let primary: Box<dyn OcrEngine> = Box::new(BitmapOcr::embedded()?);
-        Ok(Self::new(primary, ManualOcr::new()))
-    }
-
-    /// 在推荐链的基础上再插入 tesseract 兜底：位图 -> tesseract -> 人工
-    ///
-    /// 位图查表命中率远高于 tesseract，但字库是采样得来的、可能缺条目；
-    /// tesseract 作为通用 OCR 能覆盖字库缺失的情形。
-    #[cfg(feature = "tesseract")]
-    pub fn recommended_with_tesseract() -> Result<Self> {
-        let auto: Box<dyn OcrEngine> = Box::new(tesseract::TesseractOcr::new());
-        let chained = Self::new(auto, ManualOcr::new());
-        let primary: Box<dyn OcrEngine> = Box::new(BitmapOcr::embedded()?);
-        Ok(Self::new(primary, ManualOcr::new()).with_chain(chained))
-    }
-
-    /// 内部用：把「位图 -> 次级自动 -> 人工」串起来
-    #[cfg(feature = "tesseract")]
-    fn with_chain(self, inner: Self) -> Self {
-        Self {
-            primary: Box::new(ChainOcr {
-                first: self.primary,
-                second: Box::new(inner),
-            }),
-            fallback: self.fallback,
-        }
-    }
-}
-
-/// 顺序尝试两个识别器，前者失败时用后者
-#[cfg(feature = "tesseract")]
-struct ChainOcr {
-    first: Box<dyn OcrEngine>,
-    second: Box<dyn OcrEngine>,
-}
-
-#[cfg(feature = "tesseract")]
-impl OcrEngine for ChainOcr {
-    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
-        match self.first.recognize(image_base64, interactive) {
-            Ok(code) => Ok(code),
-            Err(e) => {
-                tracing::debug!(
-                    "{} 失败（{e}），改用 {}",
-                    self.first.name(),
-                    self.second.name()
-                );
-                self.second.recognize(image_base64, interactive)
-            }
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        "chain"
-    }
-}
-
-impl std::fmt::Debug for FailoverOcr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FailoverOcr")
-            .field("primary", &self.primary.name())
-            .finish_non_exhaustive()
-    }
-}
-
-impl OcrEngine for FailoverOcr {
-    fn recognize(&self, image_base64: &str, interactive: Option<&InteractiveFn>) -> Result<String> {
-        match self.primary.recognize(image_base64, interactive) {
-            Ok(code) => Ok(code),
-            Err(e) => {
-                tracing::debug!(
-                    "自动识别器 {} 失败（{e}），退回人工输入",
-                    self.primary.name()
-                );
-                self.fallback.recognize(image_base64, interactive)
-            }
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        "failover"
-    }
 }
 
 /// 校验验证码格式是否合法
@@ -360,48 +163,6 @@ mod tests {
         assert_eq!(strip_data_url_prefix("AAAA"), "AAAA");
     }
 
-    /// 手动识别器在没有回调时必须报错而不是 panic
-    #[test]
-    fn manual_ocr_without_callback_errors() {
-        let engine = ManualOcr::new();
-        let err = engine.recognize("AAAA", None).unwrap_err();
-        assert!(matches!(err, Error::CaptchaRequiresManualInput));
-    }
-
-    /// 回调返回的合法输入应被接受
-    #[test]
-    fn manual_ocr_accepts_valid_input() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("aB3d".to_string()));
-        let result = engine.recognize("AAAA", Some(cb)).unwrap();
-        assert_eq!(result, "aB3d");
-    }
-
-    /// 回调返回的输入会被去除空白字符
-    #[test]
-    fn manual_ocr_trims_whitespace() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some(" aB3d \n".to_string()));
-        let result = engine.recognize("AAAA", Some(cb)).unwrap();
-        assert_eq!(result, "aB3d");
-    }
-
-    /// 长度不符的输入应被拒绝
-    #[test]
-    fn manual_ocr_rejects_wrong_length() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("abc".to_string()));
-        assert!(engine.recognize("AAAA", Some(cb)).is_err());
-    }
-
-    /// 含非字母数字字符的输入应被拒绝
-    #[test]
-    fn manual_ocr_rejects_non_alphanumeric() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("ab-c".to_string()));
-        assert!(engine.recognize("AAAA", Some(cb)).is_err());
-    }
-
     /// 大小写混合、纯数字、纯字母都应被接受
     ///
     /// 回归测试：早期版本用 `is_ascii_alphanumeric()` 校验，会连带把
@@ -421,25 +182,6 @@ mod tests {
         }
     }
 
-    /// 用户取消应返回错误
-    #[test]
-    fn manual_ocr_handles_cancel() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|_img: &str| Ok(None);
-        assert!(engine.recognize("AAAA", Some(cb)).is_err());
-    }
-
-    /// 缺少前缀的图片会被补全为 data URL
-    #[test]
-    fn manual_ocr_normalizes_data_url() {
-        let engine = ManualOcr::new();
-        let cb: &InteractiveFn = &|img: &str| {
-            assert!(img.starts_with("data:image/png;base64,"));
-            Ok(Some("aB3d".to_string()))
-        };
-        engine.recognize("AAAA", Some(cb)).unwrap();
-    }
-
     /// 非法 base64 应产生图像错误
     #[test]
     fn decode_image_rejects_invalid_base64() {
@@ -447,112 +189,101 @@ mod tests {
         assert!(matches!(err, Error::Image(_)));
     }
 
-    /// 一个永远失败的识别器，用于测试回退行为
-    struct AlwaysFail;
-
-    impl OcrEngine for AlwaysFail {
-        fn recognize(
-            &self,
-            _image_base64: &str,
-            _interactive: Option<&InteractiveFn>,
-        ) -> Result<String> {
-            Err(Error::Image("故意的失败".to_string()))
-        }
-
-        fn name(&self) -> &'static str {
-            "always-fail"
-        }
-    }
-
-    /// 一个永远成功的识别器，用于测试回退不被触发
-    struct AlwaysOk(&'static str);
-
-    impl OcrEngine for AlwaysOk {
-        fn recognize(
-            &self,
-            _image_base64: &str,
-            _interactive: Option<&InteractiveFn>,
-        ) -> Result<String> {
-            Ok(self.0.to_string())
-        }
-
-        fn name(&self) -> &'static str {
-            "always-ok"
-        }
-    }
-
-    /// 主识别器成功时，不应打扰用户
+    /// 位图引擎的名字应稳定，便于日志归因
     #[test]
-    fn failover_uses_primary_when_it_succeeds() {
-        let engine = FailoverOcr::new(Box::new(AlwaysOk("aB3d")), ManualOcr::new());
-        let cb: &InteractiveFn = &|_img: &str| panic!("主识别器成功时不应调用回调");
-        let result = engine.recognize("AAAA", Some(cb)).unwrap();
-        assert_eq!(result, "aB3d");
+    fn bitmap_engine_name_is_stable() {
+        let engine = BitmapOcr::embedded().expect("内嵌字库应能构造");
+        assert_eq!(engine.name(), "bitmap");
     }
 
-    /// 主识别器失败时应退回人工输入
+    /// 无法识别的垃圾图必须**报错**，而不是退回某种猜测
+    ///
+    /// 这是删除兜底路径后最重要的行为契约：字库未命中时宁可报错，
+    /// 也不给出一个可能错误的字符（错字符会白耗一次登录尝试）。
     #[test]
-    fn failover_falls_back_to_manual() {
-        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("Zz9Q".to_string()));
-        let result = engine.recognize("AAAA", Some(cb)).unwrap();
-        assert_eq!(result, "Zz9Q");
-    }
-
-    /// 主识别器失败且无回调时，应报需要人工输入
-    #[test]
-    fn failover_without_callback_errors() {
-        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
-        let err = engine.recognize("AAAA", None).unwrap_err();
-        assert!(matches!(err, Error::CaptchaRequiresManualInput));
-    }
-
-    /// 回退后的输入同样要经过格式校验
-    #[test]
-    fn failover_validates_fallback_input() {
-        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("ab".to_string()));
-        assert!(engine.recognize("AAAA", Some(cb)).is_err());
-    }
-
-    /// 回退引擎的名字应稳定，便于日志归因
-    #[test]
-    fn failover_name_is_stable() {
-        let engine = FailoverOcr::new(Box::new(AlwaysFail), ManualOcr::new());
-        assert_eq!(engine.name(), "failover");
-    }
-
-    /// 推荐链应能构造，并在自动识别失败时退回人工输入
-    #[test]
-    fn recommended_falls_back_to_manual() {
-        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
-        // 传一张无法识别的垃圾图，应走到人工输入分支
-        let cb: &InteractiveFn = &|_img: &str| Ok(Some("aB3d".to_string()));
-        let got = engine
-            .recognize("data:image/png;base64,iVBORw0KGgo=", Some(cb))
-            .expect("应退回人工并成功");
-        assert_eq!(got, "aB3d");
-    }
-
-    /// 推荐链在无交互回调时应报「需要人工输入」而不是崩溃
-    #[test]
-    fn recommended_without_callback_errors_cleanly() {
-        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
+    fn bitmap_engine_errors_instead_of_guessing_on_garbage() {
+        let engine = BitmapOcr::embedded().expect("内嵌字库应能构造");
         let err = engine
-            .recognize("data:image/png;base64,iVBORw0KGgo=", None)
-            .unwrap_err();
+            .recognize("data:image/png;base64,iVBORw0KGgo=")
+            .expect_err("垃圾图不应被识别出任何字符");
+        // 图像解码失败或字形未命中都算「如实报错」，只要不是给出结果
         assert!(
-            matches!(err, Error::CaptchaRequiresManualInput),
-            "应报需要人工输入，实际: {err:?}"
+            matches!(err, Error::Image(_)),
+            "应报图像/字形错误，实际: {err:?}"
         );
     }
 
-    /// 推荐链的主识别器应是位图查表
-    #[cfg(not(feature = "tesseract"))]
+    /// 未命中时的错误信息要带上真实宽高与**完整可粘贴的位串**
+    ///
+    /// 这一条守着「诊断能力」：报错若只说"识别失败"，发现字库缺口的人
+    /// 还得重新提取一遍才知道缺什么。现在错误信息里的 `rows` 直接就是
+    /// `bitmap_lib.json` 里要填的内容。
+    ///
+    /// 位串**不截断**也是刻意的——截断后就失去了直接补库的价值。
     #[test]
-    fn recommended_uses_bitmap_as_primary() {
-        let engine = FailoverOcr::recommended().expect("推荐链应能构造");
-        let dbg = format!("{engine:?}");
-        assert!(dbg.contains("bitmap"), "主识别器应为 bitmap，实际: {dbg}");
+    fn miss_error_message_is_paste_ready_for_the_library() {
+        // 造一张纯白底 + 若干色块的图，得到字库必然没有的字形
+        let mut img = image::RgbaImage::from_pixel(100, 25, image::Rgba([255, 255, 255, 255]));
+        for y in 5..20u32 {
+            for x in 40..50u32 {
+                img.put_pixel(x, y, image::Rgba([10, 200, 60, 255]));
+            }
+        }
+        for y in 5..14u32 {
+            for x in 55..62u32 {
+                img.put_pixel(x, y, image::Rgba([200, 10, 60, 255]));
+            }
+        }
+        for y in 8..20u32 {
+            for x in 68..80u32 {
+                img.put_pixel(x, y, image::Rgba([10, 60, 200, 255]));
+            }
+        }
+        for y in 4..22u32 {
+            for x in 85..90u32 {
+                img.put_pixel(x, y, image::Rgba([120, 120, 10, 255]));
+            }
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .expect("编码 PNG");
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.get_ref());
+
+        let engine = BitmapOcr::embedded().expect("内嵌字库应能构造");
+        let err = engine
+            .recognize(&format!("data:image/png;base64,{b64}"))
+            .expect_err("人为构造的色块不应命中字库");
+        let msg = err.to_string();
+
+        // 必须给出宽高，否则不知道按什么尺寸去找
+        assert!(
+            msg.contains("字形") && msg.contains('x'),
+            "错误信息应包含字形宽高，实际: {msg}"
+        );
+        // 必须给出可粘贴的位串（每行形如 `"1010...",`，与原 JSON 同格式）
+        assert!(
+            msg.contains('"'),
+            "错误信息应包含可直接补进字库的 rows 片段，实际: {msg}"
+        );
+        // 位串必须完整：应有多行，不能被截断
+        let quoted_rows = msg.matches("\",").count();
+        assert!(
+            quoted_rows > 5,
+            "位串不应被截断（应有多个 rows 行），实际只有 {quoted_rows} 行"
+        );
+        // 每个 rows 行的长度应等于字形宽度，否则粘进字库也解析不了
+        for line in msg.lines().filter(|l| l.contains("\",")) {
+            let bits = line.trim().trim_matches(|c| c == '"' || c == ',');
+            assert!(
+                bits.len() == 10,
+                "rows 行宽应为 10（字形宽度），实际 {} 位: {bits}",
+                bits.len()
+            );
+            assert!(
+                bits.chars().all(|c| c == '0' || c == '1'),
+                "rows 行应只含 0/1，实际: {bits}"
+            );
+        }
     }
 }

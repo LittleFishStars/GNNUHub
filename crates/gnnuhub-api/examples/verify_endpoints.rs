@@ -13,18 +13,13 @@
 //!   cargo run -p gnnuhub-api --example verify_endpoints
 //! ```
 //!
-//! 验证码通过 `tools/js-recon/captcha.png` / `captcha.txt` 文件桥交互。
+//! 验证码由内嵌位图字库自动识别，无需人工介入。
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use gnnuhub_api::Client;
 use gnnuhub_core::model::AcademicTerm;
-use gnnuhub_ocr::{InteractiveFn, ManualOcr};
-
-const CAPTCHA_PNG: &str = "tools/js-recon/captcha.png";
-const CAPTCHA_TXT: &str = "tools/js-recon/captcha.txt";
-const INPUT_TIMEOUT: Duration = Duration::from_secs(600);
+use gnnuhub_ocr::BitmapOcr;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,33 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let student_id: u64 = std::env::var("GNNU_STUDENT_ID")?.parse()?;
     let password = std::env::var("GNNU_PASSWORD")?;
 
-    let callback: &InteractiveFn = &|image: &str| {
-        let img = gnnuhub_ocr::decode_image(image)?;
-        img.save(CAPTCHA_PNG)
-            .map_err(|e| gnnuhub_core::Error::Image(format!("保存验证码失败: {e}")))?;
-        let _ = std::fs::remove_file(CAPTCHA_TXT);
-        println!("  验证码已写入 {CAPTCHA_PNG}，请把 4 位字符写入 {CAPTCHA_TXT}");
-
-        let start = Instant::now();
-        loop {
-            if let Ok(text) = std::fs::read_to_string(CAPTCHA_TXT) {
-                let text = text.trim().to_string();
-                if !text.is_empty() {
-                    let _ = std::fs::remove_file(CAPTCHA_TXT);
-                    return Ok(Some(text));
-                }
-            }
-            if start.elapsed() > INPUT_TIMEOUT {
-                return Err(gnnuhub_core::Error::CaptchaRequiresManualInput);
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-    };
-
     println!("[0] 登录...");
     let client = Client::with_defaults()?;
     let session = client
-        .login(student_id, &password, &ManualOcr::new(), Some(callback))
+        .login(student_id, &password, &BitmapOcr::embedded()?)
         .await?;
     println!("    登录成功: {}\n", session.student_id());
 

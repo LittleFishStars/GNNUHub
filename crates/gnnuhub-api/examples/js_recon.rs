@@ -5,23 +5,15 @@
 //! 登录逻辑（加密、跳转、Cookie 作用域、请求头要求）都写在前端 JS 里，
 //! 读代码比反复发请求试探高效得多，也不会触发风控。
 //!
-//! # 验证码的两种处理方式
+//! # 验证码
 //!
-//! - `interval`（默认）：分两次运行，先跑 `captcha` 拿图，人工识别后
-//!   再用 `submit` 提交。适合手工调试。
-//! - `once`：通过**文件桥**在单个进程内完成——把验证码写入
-//!   `tools/js-recon/captcha.png`，轮询等待 `captcha.txt` 出现。
-//!   会话不会中断，抓取更省事。
+//! 由内嵌位图字库自动识别，无需人工介入。
 //!
 //! # 运行
 //!
 //! ```bash
 //! GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
 //!   cargo run -p gnnuhub-api --example js_recon
-//!
-//! # 交互式（单进程）模式
-//! GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
-//!   cargo run -p gnnuhub-api --example js_recon -- once
 //! ```
 //!
 //! # 产物
@@ -36,22 +28,12 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use gnnuhub_api::Client;
-use gnnuhub_ocr::{InteractiveFn, ManualOcr};
+use gnnuhub_ocr::BitmapOcr;
 
 /// 产物根目录
 const OUT_DIR: &str = "tools/js-recon/out";
-
-/// 验证码落盘位置（供人工查看）
-const CAPTCHA_PNG: &str = "tools/js-recon/captcha.png";
-
-/// 人工输入回填位置（文件桥模式）
-const CAPTCHA_TXT: &str = "tools/js-recon/captcha.txt";
-
-/// 等待人工输入的最长时间
-const INPUT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 需要抓取的页面清单
 ///
@@ -81,10 +63,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
 
-    // 只有传 `once` 才启用文件桥交互；其余情况走默认的手工输入回调
-    let interactive = std::env::args().nth(1).as_deref() == Some("once");
-    let callback: Option<&InteractiveFn> = interactive.then_some(&FILE_BRIDGE);
-
     let student_id: u64 = std::env::var("GNNU_STUDENT_ID")?.parse()?;
     let password = std::env::var("GNNU_PASSWORD")?;
 
@@ -96,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[1/3] 登录中...");
     let client = Client::with_defaults()?;
     let session = client
-        .login(student_id, &password, &ManualOcr::new(), callback)
+        .login(student_id, &password, &BitmapOcr::embedded()?)
         .await?;
     println!("      登录成功，学号 {}", session.student_id());
 
@@ -177,36 +155,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("下一步: ./tools/js-recon/analyze.sh   （离线分析，不联网）");
     Ok(())
 }
-
-/// 文件桥交互回调
-///
-/// 把验证码写入 `CAPTCHA_PNG` 并清理旧的输入文件，然后轮询等待
-/// `CAPTCHA_TXT` 出现。这样整个抓取流程在**一个进程内**跑完，会话不断。
-static FILE_BRIDGE: fn(&str) -> Result<Option<String>, gnnuhub_core::Error> = |image: &str| {
-    let img = gnnuhub_ocr::decode_image(image)?;
-    img.save(CAPTCHA_PNG)
-        .map_err(|e| gnnuhub_core::Error::Image(format!("保存验证码失败: {e}")))?;
-    let _ = std::fs::remove_file(CAPTCHA_TXT);
-
-    println!("      验证码已写入 {CAPTCHA_PNG}");
-    println!("      请查看图片，把 4 位字符写入 {CAPTCHA_TXT}");
-
-    let start = Instant::now();
-    loop {
-        if let Ok(text) = std::fs::read_to_string(CAPTCHA_TXT) {
-            let text = text.trim().to_string();
-            if !text.is_empty() {
-                println!("      读到输入: {text}");
-                let _ = std::fs::remove_file(CAPTCHA_TXT);
-                return Ok(Some(text));
-            }
-        }
-        if start.elapsed() > INPUT_TIMEOUT {
-            return Err(gnnuhub_core::Error::CaptchaRequiresManualInput);
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-};
 
 /// 抓取清单中的一条页面记录
 struct Entry {
