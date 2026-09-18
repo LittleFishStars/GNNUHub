@@ -138,6 +138,26 @@ impl Session {
         self.send(&url, |req| req.query(query).form(form)).await
     }
 
+    /// 原样发一次表单 POST，供接口探测工具使用
+    ///
+    /// 与 [`Session::post_form`] 行为一致，区别只是**公开**且允许任意
+    /// 查询串/表单体。存在的理由是：教务系统有些接口能否返回数据
+    /// 取决于一个难以离线推断的参数组合，只能靠少量实测确定；
+    /// 这类实验不应该污染正式的业务方法。
+    ///
+    /// 仍然经过客户端节流，不会绕过 [`Client::throttled`]。
+    ///
+    /// 调用方应遵守项目礼仪：一次探测不要超过个位数请求，
+    /// 并且**优先先抓页面自带的 JS 离线分析**，不要盲目枚举参数。
+    pub async fn post_form_for_probe(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        form: &[(&str, &str)],
+    ) -> Result<String> {
+        self.post_form(path, query, form).await
+    }
+
     /// 拉取首页基本资料（姓名、身份、学院、班级、头像）
     ///
     /// 对应 Python 版 `_get_basic_info`。

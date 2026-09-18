@@ -60,9 +60,11 @@
   - **不要用「多配置大投票」**：低质量配置（scale 1）与高质量等权，会把
     正确答案投掉。`0014.png` 在 `gray5p8`/`gray5p13` 下都坚定给 `LD60`，
     12 配置投票只给它 2 票。正确做法是**少量高质量配置 + 全票一致判定**。
-  - **已实现 `TesseractOcr`**（commit `47d3001`，feature `tesseract` 默认关闭）：
-    灰度化 → LANCZOS ×5 → `--psm 8` 与 `--psm 13` 双配置 → 全票一致才输出。
-    60 张样本覆盖 47/60（78.3%）。
+  - **~~已实现 `TesseractOcr`~~ 已于 2026-09-18 删除**（原因见下方
+    「只有一条识别路径」）。以下关于 tesseract 的经验**仅供历史参考**，
+    但对「如果将来要再接一个 OCR 引擎」仍有价值：
+  - 当时实现是：灰度化 → LANCZOS ×5 → `--psm 8` 与 `--psm 13` 双配置
+    → 全票一致才输出。60 张样本覆盖 47/60（78.3%）。
   - **灰度化必须复现 PIL，有两个独立的坑**（各自都能改变识别结果）：
     1. **系数用 BT.601** `(299,587,114)/1000`，**不是** `image` crate
        `to_luma8` 的 BT.709 `(2126,7152,722)/10000`。高饱和色上差 10~33 阶。
@@ -211,14 +213,48 @@
 
 - 单周课表接口 `/kbcx/xskbcxMobile_cxXsKb.html` 未实测
 - 学籍字段仅映射 12/84，完整对照表在 `tools/js-recon/out/verification.md` 附一
-- 成绩查询未实现（`/cjcx/cjcx_cxDgXscj.html?gnmkdm=N305005`）
+- **成绩查询：卡在账号数据上，不是代码上**（见下方「成绩查询接口」）
 - 界面层框架未选（用户明确表示稍后再定）
-- 两个识别引擎都已落地，验证码这条线**功能上已完成**：
-  1. **`BitmapOcr`（推荐，默认开启）**：位图查表，实测 100%。
-     入口 `FailoverOcr::recommended()` / `BitmapOcr::embedded()`。
-  2. **`TesseractOcr`（feature `tesseract`，默认关闭）**：通用 OCR，
-     样本集约 78%，作为字库缺条目时的兜底
-     （`FailoverOcr::recommended_with_tesseract()`）。
-- 继续收割仍有小幅收益：Chao1 估计字库空间约 67 条**位图**时基于 60 张样本；
-  现已有 100 张、70 条。剩余 miss 只在长尾，优先级低。
-  如要继续，跑 `ocr_verify` 若干轮后检查 json 里的 `kind == "miss"` 条目。
+
+## 成绩查询接口（2026-09-18 实测：暂不可用）
+
+**结论：该账号下接口恒定返回固定空信封，已停止调参。**
+重新验证用 `cargo run --release -p gnnuhub-api --example probe_grade`。
+module doc 里列了「已排除的 7 种假设 + 各自证据」，别再重走。
+
+### 逆向到的、值得记住的事实
+
+- **菜单 URL ≠ 数据接口**。`clickMenu('N305005', '/cjcx/cjcx_cxDgXscj.html')`
+  给的是**页面**地址；页面自带的 `cxDgXscj.js:230` 真正发查询时按 `jsxx` 二选一：
+  `jsxx=="xs"` → `/cjcx/cjcx_cxXsgrcj.html`，否则 → `cjcx_cxDgXscj.html`。
+  推而广之：**任何 `clickMenu` 的路径都要去对应 JS 里确认是不是真正的接口**。
+- **学生侧不发 `xh_id`**。`cxDgXscj.js` 里 `xh_id`/`kkxb_id`/`kkbm_id` 等
+  一大串全在 `if ($("#jsxx").val() != "xs")` 分支内；学生身份由服务端
+  会话的 `yhm` 决定。传 `xh_id` 会被**静默忽略**（这是早期误判的根源）。
+- **jqGrid 的参数名被框架重映射**（`jquery.jqgrid.settings.js:99-104` 的
+  `prmNames`）：`rows→queryModel.showCount`、`page→queryModel.currentPage`、
+  `order→queryModel.sortOrder`、`sort→queryModel.sortName`。
+  **没有 `sidx`/`sord`/`nd`/`_search`**。全站列表接口大概率共用这套设置。
+  另有 `jsonReader.root="items"`、`mtype='POST'`、
+  `rowNum = parseInt($("#pageNumber").val() || 15)`。
+- **及格判定只能用 `bfzcj`（百分制原始分）**，不能只用 `cj`：
+  补考/重修后 `cj` 会变成折算值，前端也是拿 `bfzcj < 60` 判红。
+  `cj` 为文本时（「优秀」「合格」）走白名单，且**否定词优先**
+  （否则「不合格」会被「合格」匹配上）。
+- 成绩页字段全清单（22 可见 + 13 隐藏）在 `cxDgXscj.js` 的
+  `getGridColModel()`，中文标签在 `js_globalweb_comp_i18n_N305005_zh_CN.js`。
+  两者都已存档，**无需再发请求**。
+
+### 判定「接口是不是被我调坏了」的方法
+
+别反复试参数，做**非法值对照**：同一接口发一组非法参数（如
+`xnm=9999&xqm=99`）与一组合法参数，比较**信封指纹**
+（`limit`/`pageSize`/`showCount`/`totalResult`）。
+若完全相同，说明服务端没读这些字段/对所有输入一视同仁，
+问题不在参数上。`probe_grade.rs` 里已实现 `envelope_fingerprint()`。
+
+### 长尾收割（优先级低）
+
+Chao1 估计「字库空间约 67 条」时基于 60 张样本；现已有 100 张、70 条。
+剩余 miss 只在长尾。如要继续，跑 `ocr_verify` 若干轮后检查 json 里
+`kind == "miss"` 的条目。

@@ -188,6 +188,99 @@ impl ClassSchedule {
     }
 }
 
+/// 一条成绩记录
+///
+/// 字段与成绩查询页前端的 `colModel` 一一对应（`cxDgXscj.js`
+/// 的 `getGridColModel()`，即学校 `10418` 走的学生分支）。
+///
+/// # 成绩字段为什么有四个
+///
+/// 教务系统对「同一门课」会并列给出四组数值，含义完全不同，
+/// 混用会算错绩点：
+///
+/// | 字段 | 含义 |
+/// |---|---|
+/// | [`Self::score`] (`cj`) | 用于**展示**的成绩，可能已按补考/重修折算 |
+/// | [`Self::raw_score`] (`bfzcj`) | **百分制原始分**，前端拿它判 `< 60` 标红 |
+/// | [`Self::grade_point`] (`jd`) | 课程绩点 |
+/// | [`Self::credit_grade_point`] (`xfjd`) | 学分绩点 = 学分 × 绩点 |
+///
+/// 字符串字段一律保留原始文本：教务系统会用 `"优秀"`、`"合格"`、
+/// `"通过"` 等非数值形式表示考查课成绩，转成数字会丢信息。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GradeRecord {
+    /// 学年，例如 `"2025-2026"`
+    pub academic_year: String,
+    /// 学期，例如 `"1"`
+    pub semester: String,
+    /// 课程代码
+    pub course_code: String,
+    /// 课程名称
+    pub course_name: String,
+    /// 课程性质，例如「必修」
+    pub nature: String,
+    /// 学分
+    pub credit: f32,
+    /// 成绩（展示用文本）
+    pub score: String,
+    /// 成绩备注
+    pub score_note: String,
+    /// 绩点
+    pub grade_point: String,
+    /// 成绩性质，例如「正常考试」「补考」
+    pub score_type: String,
+    /// 是否成绩作废
+    pub score_voided: String,
+    /// 是否学位课程
+    pub is_degree_course: String,
+    /// 开课学院
+    pub college: String,
+    /// 课程标记（主修 / 辅修 …）
+    pub course_mark: String,
+    /// 课程类别
+    pub category: String,
+    /// 课程归属
+    pub attribution: String,
+    /// 教学班
+    pub class_name: String,
+    /// 任课教师
+    pub teacher: String,
+    /// 考核方式
+    pub exam_mode: String,
+    /// 学生标记
+    pub student_mark: String,
+    /// 学分绩点
+    pub credit_grade_point: String,
+    /// 百分制原始分（仅 `bfzcj` 存在时才有值）
+    ///
+    /// 前端用 `bfzcj < 60` 判定「不及格标红，及格标蓝」，
+    /// 而 `cj` 在补考/重修后会变成折算值，不能用于该判定。
+    pub raw_score: Option<f32>,
+}
+
+impl GradeRecord {
+    /// 成绩是否已通过
+    ///
+    /// 优先看原始分（≥60 视为通过）；没有原始分时退化为文本判断。
+    /// 文本判断采用**白名单**：教务系统对考查课常用「优秀/良好/合格/
+    /// 中等/及格/通过」表示通过，其余（含「不合格」「缺考」「作弊」）
+    /// 一律视为未通过——保守方向更安全，避免把未通过算成已通过。
+    pub fn passed(&self) -> bool {
+        if let Some(raw) = self.raw_score {
+            return raw >= 60.0;
+        }
+        const PASSING: &[&str] = &[
+            "优秀", "良好", "中等", "合格", "及格", "通过", "优", "良", "中",
+        ];
+        let text = self.score.trim();
+        // 先排除明确的否定词，避免「不合格」被「合格」匹配上
+        if text.contains("不合格") || text.contains("不通过") || text.contains("未通过") {
+            return false;
+        }
+        PASSING.iter().any(|p| text.contains(p))
+    }
+}
+
 /// 学生基本信息
 ///
 /// 全部字段都是可选的：不同页面（首页 / 学籍页 / 课表接口）各自只提供
