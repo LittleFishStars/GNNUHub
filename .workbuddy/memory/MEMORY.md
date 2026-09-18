@@ -146,13 +146,17 @@
   `xjztdm`、学制 `xz`、生源地 `syd`、入学总分 `rxzf` 等字段；
   `zyh_id` 是干净专业名免剥后缀。`fetch_student_info` 走它，
   失败回退 HTML。
-- **移动端课表接口已证伪并移除**：`xskbcxMobile_cxXsKb.html`
-  （N2154）对浏览器复刻（M1）与程序化复刻（M3）均返回字面量
-  `null`，疑似服务端失效，**别再试图调通它**。单周课表 = 整学期
-  JSON 课表 + `ClassSchedule::week_view(w)` 客户端过滤（0 额外
-  请求）；周次解析支持 `1-18周` / `7-13周(单)` / 多段逗号，不可
-  解析保守返回 true。`this_week()` 是唯一保留的 HTML 解析路径
-  （当前周次无 JSON 接口）。
+- **⚠️ 课表接口 2026-09-18 下午起恒定返回 null（学校端问题）**：
+  `xskbcx_cxXsgrkb.html` 对所有学期、所有形状（A-J 十组对照实验）
+  恒定 `null`，同日早些同形状实测成功过 9 门课；前端 JS 对
+  `data==null` 有显式处理（浏览器也显示空课表）。**修正早前判断：
+  移动端接口 `xskbcxMobile_cxXsKb` 的 null 并非单独失效，两者症状
+  一致，疑似学校端课表数据服务变更/故障**。代码已优雅降级
+  （parse 把 null → 空课表）。恢复后无需改代码。探针：
+  `cargo run --release -p gnnuhub-api --example probe_kb_null`。
+  单周课表 = `ClassSchedule::week_view(w)` 客户端过滤；周次解析
+  支持 `1-18周` / `7-13周(单)` / 多段逗号，不可解析保守返回 true。
+  `this_week()` 是唯一保留的 HTML 解析路径（当前周次无 JSON 接口）。
 
 - **正方 jqGrid 数据接口的通用规律（2026-09-18 补充）**：数据接口
   常常就是菜单页面本身 + `?doType=query`；框架 `remoteParams` 注入

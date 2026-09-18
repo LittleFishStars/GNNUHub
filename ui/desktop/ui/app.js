@@ -143,7 +143,10 @@ function renderSchedule(schedule) {
   if (total === 0) {
     const tip = document.createElement("div");
     tip.className = "empty-tip";
-    tip.textContent = "该学期暂无课程记录";
+    tip.innerHTML =
+      "该学期暂无课程记录<br>" +
+      '<span style="font-size:12px">注：2026-09-18 起教务系统课表接口对所有学期返回空数据' +
+      "（浏览器网页端同样为空），推测为学校端课表服务调整，恢复后本界面即自动恢复。</span>";
     grid.appendChild(tip);
   }
 }

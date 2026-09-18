@@ -357,8 +357,22 @@ struct RawCourse {
 ///
 /// 返回解析后的课表与学生简要信息（课表接口同时携带姓名、
 /// 学院、辅导员等信息，可用来填充 [`StudentInfo`]）。
+///
+/// # `null` 响应是合法的
+///
+/// 2026-09-18 实测：服务端在「无课表数据」时会返回字面量 `null`
+/// （前端 `cxKbContent` 对 `data==null` 有显式处理，浏览器同样显示
+/// 空课表）。本函数把 `null` 解析为**空课表**而不是报错——2026-09-18
+/// 下午起该接口对所有学期恒定返回 `null`（含此前有课的历史学期，
+/// A-J 八组对照实验定性，见 `probe_kb_null.rs`），推测为学校端
+/// 课表数据服务变更/故障，浏览器用户同样受影响。
 pub fn parse_class_schedule(body: &str) -> Result<(ClassSchedule, StudentInfo)> {
-    let raw: RawScheduleResponse = serde_json::from_str(body).map_err(Error::Json)?;
+    // 字面量 null → 空课表（serde 对 Option 是唯一能直接吃 null 的口）
+    let raw: Option<RawScheduleResponse> = serde_json::from_str(body).map_err(Error::Json)?;
+    let Some(raw) = raw else {
+        tracing::warn!("课表接口返回 null（无课表数据或学校端服务异常），按空课表处理");
+        return Ok((ClassSchedule::default(), StudentInfo::default()));
+    };
 
     let mut info = StudentInfo::default();
     if let Some(brief) = &raw.xsxx {
@@ -915,6 +929,15 @@ mod tests {
     fn parses_empty_schedule() {
         let (schedule, _) = parse_class_schedule(r#"{"kbList":[]}"#).unwrap();
         assert_eq!(schedule.course_count(), 0);
+    }
+
+    /// 字面量 `null` 是服务端「无课表数据」的合法响应（2026-09-18
+    /// 实测，浏览器端同样显示空课表），应解析为空课表而不是报错
+    #[test]
+    fn parses_null_schedule_as_empty() {
+        let (schedule, info) = parse_class_schedule("null").unwrap();
+        assert_eq!(schedule.course_count(), 0);
+        assert!(info.name.is_none());
     }
 
     /// 节次字段畸形时不应导致整条记录丢失
