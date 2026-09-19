@@ -15,7 +15,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{
-    AcademicTerm, ClassSchedule, ExamRecord, Notice, PeriodTime, RetakeCourse, StudentInfo,
+    AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, PeriodTime, RetakeCourse,
+    StudentInfo,
 };
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
@@ -33,6 +34,8 @@ struct SessionState {
     exams: HashMap<AcademicTerm, Vec<ExamRecord>>,
     /// 按学年学期分桶缓存的重修课程库
     retakes: HashMap<AcademicTerm, Vec<RetakeCourse>>,
+    /// 学业情况（GPA）缓存（无请求参数，整体一份）
+    gpa: Option<Vec<GpaSummary>>,
     /// 节次时间表
     timetable: Option<Vec<PeriodTime>>,
     /// 当前教学周
@@ -469,6 +472,33 @@ impl Session {
         let mut state = self.state.lock().await;
         state.retakes.insert(term, courses.clone());
         Ok(courses)
+    }
+
+    /// 拉取学业情况（按课程性质分组的 GPA 与获得学分）
+    ///
+    /// 对应「学生学业情况查询」（`xsxyqk_cxKczxAllIndex.html?doType=query`，
+    /// N105515）。实测服务端不提供全量 GPA，需按分组学分加权计算
+    /// （见 [`GpaSummary::overall_gpa`]）。
+    pub async fn gpa_summary(&self) -> Result<Vec<GpaSummary>> {
+        {
+            let state = self.state.lock().await;
+            if let Some(cached) = &state.gpa {
+                return Ok(cached.clone());
+            }
+        }
+
+        let body = self
+            .post_form(
+                "/xsxy/xsxyqk_cxKczxAllIndex.html",
+                &[("gnmkdm", "N105515"), ("doType", "query")],
+                &[("xh_id", "")],
+            )
+            .await?;
+
+        let summary = parse::parse_gpa_summary(&body)?;
+        let mut state = self.state.lock().await;
+        state.gpa = Some(summary.clone());
+        Ok(summary)
     }
 
     /// 拉取首页通知公告列表

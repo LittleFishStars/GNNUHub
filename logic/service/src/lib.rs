@@ -187,6 +187,13 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取学业情况（按课程性质分组的 GPA 与获得学分）
+    ///
+    /// 全量加权 GPA 用 [`model::GpaSummary::overall_gpa`] 计算。
+    pub async fn gpa_summary(&self) -> std::result::Result<Vec<model::GpaSummary>, ServiceError> {
+        Ok(self.active_session().await?.gpa_summary().await?)
+    }
+
     /// 拉取首页通知公告列表
     pub async fn notices(&self) -> std::result::Result<Vec<model::Notice>, ServiceError> {
         Ok(self.active_session().await?.notices().await?)

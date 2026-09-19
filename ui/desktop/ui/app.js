@@ -229,6 +229,63 @@ async function loadExams() {
   });
 }
 
+/* ---------- 学业情况（GPA） ---------- */
+
+async function loadAcademic() {
+  await withBusy("获取学业情况", async () => {
+    clearPanelError("tab-academic");
+    const items = await invoke("gpa_summary");
+    const cards = $("academic-cards");
+    cards.innerHTML = "";
+
+    const addCard = (k, v) => {
+      const card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
+      cards.appendChild(card);
+    };
+    addCard("总加权 GPA", GpaSummary_overall(items).toFixed(2));
+    addCard("已获学分合计", GpaSummary_total(items).toFixed(1));
+
+    const wrap = $("academic-table");
+    wrap.innerHTML = "";
+    if (!items.length) {
+      wrap.innerHTML = '<div class="empty-tip">暂无学业数据</div>';
+    } else {
+      const table = document.createElement("table");
+      table.className = "exam-table";
+      table.innerHTML =
+        "<thead><tr><th>课程性质</th><th>GPA</th><th>获得学分</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const it of items) {
+        const tr = document.createElement("tr");
+        for (const v of [it.nature_name, it.gpa.toFixed(2), it.earned_credit.toFixed(1)]) {
+          const td = document.createElement("td");
+          td.textContent = v;
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+    }
+    setStatus("学业情况已更新");
+  });
+}
+
+/** 学分加权总 GPA（与后端 overall_gpa 一致） */
+function GpaSummary_overall(items) {
+  let total = 0, credits = 0;
+  for (const it of items) {
+    total += it.gpa * it.earned_credit;
+    credits += it.earned_credit;
+  }
+  return credits > 0 ? total / credits : 0;
+}
+function GpaSummary_total(items) {
+  return items.reduce((s, it) => s + it.earned_credit, 0);
+}
+
 /* ---------- 通知与系统消息 ---------- */
 
 async function loadNotices() {
@@ -502,6 +559,9 @@ document.querySelectorAll(".tab").forEach((btn) => {
     }
     if (btn.dataset.tab === "notices" && !$("notice-list").childElementCount) {
       loadNotices().catch(() => {});
+    }
+    if (btn.dataset.tab === "academic" && !$("academic-table").childElementCount) {
+      loadAcademic().catch(() => {});
     }
   });
 });

@@ -552,6 +552,41 @@ impl ExamRecord {
     }
 }
 
+/// 一条按课程性质汇总的学业情况（GPA）
+///
+/// 来自「学生学业情况查询」（`xsxyqk_cxKczxAllIndex.html?doType=query`，
+/// N105515）。实测按课程性质（必修/选修等）逐组返回 GPA 与获得学分。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GpaSummary {
+    /// 课程性质代码（`01`=必修、`02`=选修 等）
+    pub nature_code: String,
+    /// 课程性质名称（例如「必修课」）
+    pub nature_name: String,
+    /// 该性质课程的平均绩点（GPA）
+    pub gpa: f32,
+    /// 该性质课程已获得的学分
+    pub earned_credit: f32,
+}
+
+impl GpaSummary {
+    /// 总加权平均绩点：Σ(GPA × 学分) ÷ Σ学分
+    ///
+    /// 对全部分组做学分加权。列表为空时返回 0。
+    pub fn overall_gpa(items: &[Self]) -> f32 {
+        let (mut total, mut credits) = (0.0_f32, 0.0_f32);
+        for item in items {
+            total += item.gpa * item.earned_credit;
+            credits += item.earned_credit;
+        }
+        if credits > 0.0 { total / credits } else { 0.0 }
+    }
+
+    /// 已获得学分合计
+    pub fn total_credit(items: &[Self]) -> f32 {
+        items.iter().map(|i| i.earned_credit).sum()
+    }
+}
+
 /// 一条通知公告
 ///
 /// 来自首页通知栏（`index_cxNews.html`）。`detail_path` 是详情页
