@@ -187,6 +187,14 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取校历（当前学期起止日期；可用 [`model::AcademicCalendar::
+    /// current_week`] 从日期推算当前教学周）
+    pub async fn academic_calendar(
+        &self,
+    ) -> std::result::Result<model::AcademicCalendar, ServiceError> {
+        Ok(self.active_session().await?.academic_calendar().await?)
+    }
+
     /// 拉取学业情况（按课程性质分组的 GPA 与获得学分）
     ///
     /// 全量加权 GPA 用 [`model::GpaSummary::overall_gpa`] 计算。

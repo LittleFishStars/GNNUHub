@@ -11,8 +11,9 @@
 use std::collections::BTreeMap;
 
 use gnnuhub_core::model::{
-    AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord, GpaSummary,
-    GradeRecord, Notice, PeriodRange, PeriodTime, RetakeCourse, StudentInfo, parse_credit,
+    AcademicCalendar, AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord,
+    GpaSummary, GradeRecord, Notice, PeriodRange, PeriodTime, RetakeCourse, StudentInfo,
+    parse_credit,
 };
 use gnnuhub_core::{Error, Result};
 use serde::Deserialize;
@@ -834,6 +835,49 @@ pub fn parse_system_messages(body: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// 从首页校历组件（`index_cxAreaFive.html`）解析学年学期信息
+///
+/// 页面为服务端渲染文本，学期信息形如
+/// `2026-2027学年1学期(2026-08-31至2027-01-17)`。为避免引入
+/// regex 依赖，这里用定位字符串的方式提取。
+pub fn parse_calendar(html: &str) -> Result<AcademicCalendar> {
+    let err = || Error::PageParse("校历页中未找到学期信息".to_string());
+
+    // 形如 `2026-2027学年1学期(2026-08-31至2027-01-17)`
+    // 学年字段取「学年」前数字段的第一段（2026-2027 → 2026，起始年）
+    let year_pos = html.find("学年").ok_or_else(err)?;
+    let before = &html[..year_pos];
+    let digits_start = before
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '-')
+        .len();
+    let year: u16 = before[digits_start..]
+        .split('-')
+        .next()
+        .and_then(|seg| seg.parse().ok())
+        .ok_or_else(err)?;
+
+    let paren = html[year_pos..].find('(').ok_or_else(err)? + year_pos;
+    let close = html[paren..].find(')').ok_or_else(err)? + paren;
+    let inner = &html[paren + 1..close];
+
+    let (start_date, end_date) = inner.split_once('至').ok_or_else(err)?;
+
+    // 学期数字在「学年」与「学期(」之间，形如 `1学期`
+    let seg = &html[year_pos + "学年".len()..paren];
+    let term: u8 = seg
+        .trim_end_matches("学期")
+        .trim()
+        .parse()
+        .map_err(|_| err())?;
+
+    Ok(AcademicCalendar {
+        year,
+        term,
+        start_date: start_date.trim().to_string(),
+        end_date: end_date.trim().to_string(),
+    })
+}
+
 /// 学业情况（GPA）查询接口的信封（数据在 `items`）
 #[derive(Debug, Default, Deserialize)]
 struct RawGpaResponse {
@@ -1416,6 +1460,23 @@ mod tests {
         assert!(!second.pinned);
         assert_eq!(second.title, "关于转专业计划的通...");
         assert_eq!(second.date, "2026-09-01");
+    }
+
+    /// 校历解析（夹具文本对齐首页 AreaFive 实测渲染）
+    #[test]
+    fn parses_calendar() {
+        let html = "<div>2026-2027学年1学期(2026-08-31至2027-01-17)</div>";
+        let cal = parse_calendar(html).unwrap();
+        assert_eq!(cal.year, 2026);
+        assert_eq!(cal.term, 1);
+        assert_eq!(cal.start_date, "2026-08-31");
+        assert_eq!(cal.end_date, "2027-01-17");
+
+        // 当前周推算：起始日当天为第 1 周，8 天后为第 2 周，未开始为 None
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 8, 31).unwrap();
+        assert_eq!(cal.current_week(start), Some(1));
+        assert_eq!(cal.current_week(start + chrono::Duration::days(8)), Some(2));
+        assert_eq!(cal.current_week(start - chrono::Duration::days(1)), None);
     }
 
     /// 学业情况（GPA）解析（脱敏夹具，键集对齐实测响应）

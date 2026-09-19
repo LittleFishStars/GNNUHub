@@ -3,6 +3,7 @@
 //! 这里的结构体对应 Python 版 `api.py` 中解析出的数据，
 //! 但做了更严格的类型约束（例如学期用枚举而非裸 int）。
 
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -549,6 +550,39 @@ impl ExamRecord {
     /// 是否为补考场次
     pub fn is_make_up(&self) -> bool {
         self.make_up.contains("是")
+    }
+}
+
+/// 学年学期校历信息
+///
+/// 来自首页校历组件（`index_cxAreaFive.html`，服务端渲染文本）。
+/// 据此可以从日期**直接推算当前教学周**（无需解析课表页下拉框）：
+/// `current_week = ⌊(今天 − 起始日期) / 7 天⌋ + 1`。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcademicCalendar {
+    /// 学年（例如 2026 表示 2026-2027 学年）
+    pub year: u16,
+    /// 学期（1 或 2）
+    pub term: u8,
+    /// 第一天（星期一）的日期，`YYYY-MM-DD`
+    pub start_date: String,
+    /// 最后一天的日期，`YYYY-MM-DD`
+    pub end_date: String,
+}
+
+impl AcademicCalendar {
+    /// 根据校历与「今天」推算当前教学周
+    ///
+    /// `today` 早于起始日期时返回 `None`（学期未开始）；日期解析
+    /// 失败同样返回 `None`（调用方应回退到 [`crate` 里别的途径]）。
+    pub fn current_week(&self, today: chrono::NaiveDate) -> Option<u32> {
+        let start = NaiveDate::parse_from_str(&self.start_date, "%Y-%m-%d").ok()?;
+        let days = (today - start).num_days();
+        if days < 0 {
+            None
+        } else {
+            Some((days / 7 + 1) as u32)
+        }
     }
 }
 

@@ -244,8 +244,20 @@ async function loadAcademic() {
       card.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
       cards.appendChild(card);
     };
+
+    // 校历卡片：学期起止 + 推算当前周（比 this_week 的 HTML 解析更稳）
+    let calNote = "—";
+    try {
+      const cal = await invoke("academic_calendar");
+      const start = new Date(cal.start_date);
+      const days = Math.floor((Date.now() - start) / 86400000);
+      const week = days >= 0 ? Math.floor(days / 7) + 1 : null;
+      calNote = `${cal.start_date} ~ ${cal.end_date}` + (week ? `（第 ${week} 周）` : "（未开始）");
+    } catch { /* 校历失败不影响主卡片 */ }
+
     addCard("总加权 GPA", GpaSummary_overall(items).toFixed(2));
     addCard("已获学分合计", GpaSummary_total(items).toFixed(1));
+    addCard("本学期", calNote);
 
     const wrap = $("academic-table");
     wrap.innerHTML = "";

@@ -15,8 +15,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{
-    AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, PeriodTime, RetakeCourse,
-    StudentInfo,
+    AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, PeriodTime,
+    RetakeCourse, StudentInfo,
 };
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
@@ -36,6 +36,8 @@ struct SessionState {
     retakes: HashMap<AcademicTerm, Vec<RetakeCourse>>,
     /// 学业情况（GPA）缓存（无请求参数，整体一份）
     gpa: Option<Vec<GpaSummary>>,
+    /// 校历缓存
+    calendar: Option<AcademicCalendar>,
     /// 节次时间表
     timetable: Option<Vec<PeriodTime>>,
     /// 当前教学周
@@ -472,6 +474,28 @@ impl Session {
         let mut state = self.state.lock().await;
         state.retakes.insert(term, courses.clone());
         Ok(courses)
+    }
+
+    /// 拉取校历（当前学期起止日期）
+    ///
+    /// 来自首页校历组件（`index_cxAreaFive.html`）。学期未开始时
+    /// 也能取得校历（本方法只解析学期信息，不涉及当前周）。
+    pub async fn academic_calendar(&self) -> Result<AcademicCalendar> {
+        {
+            let state = self.state.lock().await;
+            if let Some(cached) = &state.calendar {
+                return Ok(cached.clone());
+            }
+        }
+
+        let body = self
+            .get("/xtgl/index_cxAreaFive.html", &[("localeKey", "zh_CN")])
+            .await?;
+
+        let cal = parse::parse_calendar(&body)?;
+        let mut state = self.state.lock().await;
+        state.calendar = Some(cal.clone());
+        Ok(cal)
     }
 
     /// 拉取学业情况（按课程性质分组的 GPA 与获得学分）

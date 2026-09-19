@@ -23,6 +23,7 @@ scraper.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 anyhow.workspace = true
 tracing-subscriber.workspace = true
 base64.workspace = true

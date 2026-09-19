@@ -85,10 +85,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("    共 {} 个数据行", lines.len());
 
+    // 校历实测：学期起止 + 推算当前周
+    match session.academic_calendar().await {
+        Ok(cal) => {
+            let today = chrono::Local::now().date_naive();
+            let week = cal.current_week(today);
+            println!(
+                "\n校历: {} 学年{}学期 {} ~ {}，今天为第 {:?} 周 ✅",
+                cal.year, cal.term, cal.start_date, cal.end_date, week
+            );
+        }
+        Err(e) => println!("\n校历: ❌ {e}"),
+    }
+
     // 顺带验证重修课程（回归）
     match session.retake_courses(AcademicTerm::first(2026)).await {
-        Ok(c) => println!("\n回归：重修课程库 {} 条 ✅", c.len()),
-        Err(e) => println!("\n回归：重修课程库 ❌ {e}"),
+        Ok(c) => println!("回归：重修课程库 {} 条 ✅", c.len()),
+        Err(e) => println!("回归：重修课程库 ❌ {e}"),
     }
     Ok(())
 }
