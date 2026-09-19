@@ -552,6 +552,24 @@ impl ExamRecord {
     }
 }
 
+/// 一条通知公告
+///
+/// 来自首页通知栏（`index_cxNews.html`）。`detail_path` 是详情页
+/// 站内路径（含 `xwbh` 编号），拼接域名后可直接请求正文。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notice {
+    /// 通知标题
+    pub title: String,
+    /// 发布日期（`YYYY-MM-DD`）
+    pub date: String,
+    /// 详情页站内路径（例如 `/xtgl/xwck_ckXw.html?xwbh=...`）
+    pub detail_path: String,
+    /// 是否置顶
+    pub pinned: bool,
+    /// 栏目标记（接口原文，如「【通知】」；可能为空）
+    pub category: String,
+}
+
 /// 一条重修课程记录
 ///
 /// 来自「重修课程查询」（`cxkccx_cxCxkccxIndex.html`，模块码

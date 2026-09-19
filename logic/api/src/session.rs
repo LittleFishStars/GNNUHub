@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{
-    AcademicTerm, ClassSchedule, ExamRecord, PeriodTime, RetakeCourse, StudentInfo,
+    AcademicTerm, ClassSchedule, ExamRecord, Notice, PeriodTime, RetakeCourse, StudentInfo,
 };
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
@@ -469,6 +469,28 @@ impl Session {
         let mut state = self.state.lock().await;
         state.retakes.insert(term, courses.clone());
         Ok(courses)
+    }
+
+    /// 拉取首页通知公告列表
+    ///
+    /// 对应首页通知栏（`index_cxNews.html`，无模块码）。
+    /// 无缓存：通知可能随时更新，且请求轻量。
+    pub async fn notices(&self) -> Result<Vec<Notice>> {
+        let body = self
+            .get("/xtgl/index_cxNews.html", &[("localeKey", "zh_CN")])
+            .await?;
+        parse::parse_notices(&body)
+    }
+
+    /// 拉取系统提醒消息
+    ///
+    /// 对应首页系统提醒（`index_cxXttsxx.html`，`bj=2` 为学生侧）。
+    /// 响应为 JSON 字符串，多条以 `|` 分隔。
+    pub async fn system_messages(&self) -> Result<Vec<String>> {
+        let body = self
+            .get("/xtgl/index_cxXttsxx.html", &[("bj", "2")])
+            .await?;
+        parse::parse_system_messages(&body)
     }
 
     /// 获取当前教学周

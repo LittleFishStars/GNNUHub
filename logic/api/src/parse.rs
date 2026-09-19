@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use gnnuhub_core::model::{
-    AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord, GradeRecord,
+    AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord, GradeRecord, Notice,
     PeriodRange, PeriodTime, RetakeCourse, StudentInfo, parse_credit,
 };
 use gnnuhub_core::{Error, Result};
@@ -752,6 +752,88 @@ pub fn parse_retake_courses(body: &str) -> Result<Vec<RetakeCourse>> {
     Ok(raw.items.into_iter().map(RetakeCourse::from).collect())
 }
 
+/// 解析首页通知栏（`index_cxNews.html` 的 HTML 片段）
+///
+/// 每条通知是 `a.list-group-item`：`title` 属性为完整标题，
+/// `span.time` 为日期，`span.title` 内的 `font[color=red]` 表示
+/// 置顶，`href` 携带详情页编号（`xwbh`）。
+pub fn parse_notices(html: &str) -> Result<Vec<Notice>> {
+    let doc = scraper::Html::parse_fragment(html);
+    let item = selector("a.list-group-item")?;
+
+    let mut notices = Vec::new();
+    for el in doc.select(&item) {
+        let title = el
+            .value()
+            .attr("title")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if title.is_empty() {
+            continue;
+        }
+
+        let date = el
+            .select(&selector("span.time")?)
+            .next()
+            .map(|t| t.text().collect::<String>().trim().to_string())
+            .unwrap_or_default();
+
+        let span_text = el
+            .select(&selector("span.title")?)
+            .next()
+            .map(|t| t.text().collect::<String>())
+            .unwrap_or_default();
+
+        let pinned = span_text.contains("【置顶】");
+
+        // 栏目标记：【通知】/【新闻】等，去掉后剩余部分为纯标题
+        let mut category = String::new();
+        let mut clean = span_text.replace("【置顶】", "");
+        if let Some(start) = clean.find('【')
+            && let Some(rel) = clean[start..].find('】')
+        {
+            let end = start + rel + '】'.len_utf8();
+            let tag = clean[start..end].to_string();
+            if tag != "【置顶】" {
+                category = tag.clone();
+            }
+            clean = clean.replace(&tag, "");
+        }
+        clean = clean.trim().to_string();
+
+        let href = el.value().attr("href").unwrap_or_default().to_string();
+        let detail_path = if href.starts_with('/') {
+            href
+        } else {
+            format!("/{href}")
+        };
+
+        notices.push(Notice {
+            title,
+            date,
+            detail_path,
+            pinned,
+            category,
+        });
+    }
+    Ok(notices)
+}
+
+/// 解析系统提醒消息（`index_cxXsKttsxx` 类接口的响应）
+///
+/// 响应是一个 JSON 字符串，多条消息以 `|` 分隔，可能带尾部空段：
+/// `"消息一|消息二|"`.
+pub fn parse_system_messages(body: &str) -> Result<Vec<String>> {
+    let text: String = serde_json::from_str(body).map_err(Error::Json)?;
+    Ok(text
+        .split('|')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// 从教学周页面抽取当前周
 ///
 /// 原实现从 `#zs` 下拉框中已选中的 option 文本取周次，
@@ -1251,6 +1333,56 @@ mod tests {
         assert!(second.location.is_empty());
         assert_eq!(second.duration_minutes, None, "非法时长应退化为 None");
         assert!(second.is_make_up(), "补考标记应可判定");
+    }
+
+    /// 通知栏解析（脱敏夹具，DOM 结构对齐实测响应）
+    #[test]
+    fn parses_notices() {
+        let html = r#"<div>
+          <a title="【学生】教务系统使用说明" href="/xtgl/xwck_ckXw.html?xwbh=AAA111&doType=save" class="list-group-item">
+            <span class="title xwxx">
+              <font color="red">【置顶】</font>
+              <font color="black">【通知】</font>
+              【学生】教务系统使用说明
+            </span>
+            <span class="time">2020-12-31</span>
+          </a>
+          <a title="关于转专业计划的通..." href="/xtgl/xwck_ckXw.html?xwbh=BBB222&doType=save" class="list-group-item">
+            <span class="title xwxx">
+              <font color="black">【通知】</font>
+              关于转专业计划的通...
+            </span>
+            <span class="time">2026-09-01</span>
+          </a>
+        </div>"#;
+        let notices = parse_notices(html).unwrap();
+        assert_eq!(notices.len(), 2);
+
+        let first = &notices[0];
+        assert_eq!(first.title, "【学生】教务系统使用说明");
+        assert_eq!(first.date, "2020-12-31");
+        assert!(first.pinned);
+        assert_eq!(first.category, "【通知】");
+        assert_eq!(
+            first.detail_path,
+            "/xtgl/xwck_ckXw.html?xwbh=AAA111&doType=save"
+        );
+
+        let second = &notices[1];
+        assert!(!second.pinned);
+        assert_eq!(second.title, "关于转专业计划的通...");
+        assert_eq!(second.date, "2026-09-01");
+    }
+
+    /// 系统提醒消息解析：`|` 分隔、去空段
+    #[test]
+    fn parses_system_messages() {
+        let body = r#""你可能有应选未选的主修课程，请核实！|""#;
+        assert_eq!(
+            parse_system_messages(body).unwrap(),
+            vec!["你可能有应选未选的主修课程，请核实！".to_string()]
+        );
+        assert!(parse_system_messages(r#""""#).unwrap().is_empty());
     }
 
     /// 重修课程解析（脱敏夹具，键集对齐实测响应）

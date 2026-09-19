@@ -187,6 +187,16 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取首页通知公告列表
+    pub async fn notices(&self) -> std::result::Result<Vec<model::Notice>, ServiceError> {
+        Ok(self.active_session().await?.notices().await?)
+    }
+
+    /// 拉取系统提醒消息
+    pub async fn system_messages(&self) -> std::result::Result<Vec<String>, ServiceError> {
+        Ok(self.active_session().await?.system_messages().await?)
+    }
+
     /// 拉取重修课程库
     ///
     /// 实测服务端不按学期过滤、返回全部重修课程记录；学期参数仅作

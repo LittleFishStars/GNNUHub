@@ -311,3 +311,17 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   color: var(--error);
   font-size: 13px;
 }
+
+
+/* 系统提醒消息横幅 */
+.msg-banner {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #fff8e6;
+  border: 1px solid #f5e0a3;
+  color: #8a6d1a;
+  font-size: 13px;
+}
+
+.exam-table tr.pinned td:first-child { font-weight: 600; color: var(--primary-dark); }

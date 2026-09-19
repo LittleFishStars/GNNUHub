@@ -38,6 +38,7 @@
         <button data-tab="schedule" class="tab active">课表</button>
         <button data-tab="exams" class="tab">考试</button>
         <button data-tab="retakes" class="tab">重修</button>
+        <button data-tab="notices" class="tab">通知</button>
         <button data-tab="profile" class="tab">学籍</button>
         <button data-tab="grades" class="tab" disabled
                 title="成绩接口尚未实测可用">成绩</button>
@@ -93,6 +94,15 @@
         <button id="btn-load-exams" class="primary small">查询</button>
       </div>
       <div id="exam-list"></div>
+    </div>
+
+    <!-- 通知 -->
+    <div id="tab-notices" class="tab-panel hidden">
+      <div id="msg-banner" class="msg-banner hidden"></div>
+      <div class="controls">
+        <button id="btn-load-notices" class="primary small">刷新</button>
+      </div>
+      <div id="notice-list"></div>
     </div>
 
     <!-- 重修课程 -->

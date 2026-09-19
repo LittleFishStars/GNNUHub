@@ -229,6 +229,55 @@ async function loadExams() {
   });
 }
 
+/* ---------- 通知与系统消息 ---------- */
+
+async function loadNotices() {
+  await withBusy("获取通知与消息", async () => {
+    clearPanelError("tab-notices");
+    // 系统提醒消息与通知一起拉，消息横幅置顶展示
+    const [notices, messages] = await Promise.all([
+      invoke("notices"),
+      invoke("system_messages").catch(() => []),
+    ]);
+
+    const banner = $("msg-banner");
+    if (messages.length) {
+      banner.textContent = "系统提醒：" + messages.join("　|　");
+      banner.classList.remove("hidden");
+    } else {
+      banner.classList.add("hidden");
+    }
+
+    const wrap = $("notice-list");
+    wrap.innerHTML = "";
+    if (!notices.length) {
+      wrap.innerHTML = '<div class="empty-tip">暂无通知</div>';
+    } else {
+      const table = document.createElement("table");
+      table.className = "exam-table";
+      table.innerHTML =
+        "<thead><tr><th>标题</th><th>栏目</th><th>日期</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const n of notices) {
+        const tr = document.createElement("tr");
+        if (n.pinned) tr.classList.add("pinned");
+
+        const titleTd = document.createElement("td");
+        titleTd.textContent = (n.pinned ? "【置顶】" : "") + n.title;
+        const catTd = document.createElement("td");
+        catTd.textContent = n.category || "—";
+        const dateTd = document.createElement("td");
+        dateTd.textContent = n.date || "—";
+        tr.append(titleTd, catTd, dateTd);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+    }
+    setStatus(`通知已更新（${notices.length} 条）`);
+  });
+}
+
 /* ---------- 重修课程 ---------- */
 
 function renderRetakes(courses) {
@@ -415,6 +464,9 @@ $("btn-load-exams").addEventListener("click", (ev) =>
 $("btn-load-retakes").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadRetakes()).catch(() => {}));
 
+$("btn-load-notices").addEventListener("click", (ev) =>
+    withButton(ev.currentTarget, () => loadNotices()).catch(() => {}));
+
 $("btn-this-week").addEventListener("click", async () => {
   try {
     const week = await invoke("this_week");
@@ -447,6 +499,9 @@ document.querySelectorAll(".tab").forEach((btn) => {
     }
     if (btn.dataset.tab === "retakes" && !$("retake-list").childElementCount) {
       loadRetakes().catch(() => {});
+    }
+    if (btn.dataset.tab === "notices" && !$("notice-list").childElementCount) {
+      loadNotices().catch(() => {});
     }
   });
 });

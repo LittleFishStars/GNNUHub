@@ -21,7 +21,7 @@
 
 use gnnuhub_service::HubService;
 use gnnuhub_service::model::{
-    AcademicTerm, ClassSchedule, ExamRecord, RetakeCourse, StudentInfo, Term,
+    AcademicTerm, ClassSchedule, ExamRecord, Notice, RetakeCourse, StudentInfo, Term,
 };
 
 /// Tauri 命令的统一返回类型
@@ -94,6 +94,18 @@ async fn this_week(state: tauri::State<'_, HubService>) -> CmdResult<u8> {
     state.this_week().await.map_err(cmd_error)
 }
 
+/// 拉取首页通知公告列表
+#[tauri::command]
+async fn notices(state: tauri::State<'_, HubService>) -> CmdResult<Vec<Notice>> {
+    state.notices().await.map_err(cmd_error)
+}
+
+/// 拉取系统提醒消息
+#[tauri::command]
+async fn system_messages(state: tauri::State<'_, HubService>) -> CmdResult<Vec<String>> {
+    state.system_messages().await.map_err(cmd_error)
+}
+
 /// 拉取重修课程库
 #[tauri::command]
 async fn retake_courses(
@@ -146,6 +158,8 @@ pub fn run() {
             this_week,
             exam_schedule,
             retake_courses,
+            notices,
+            system_messages,
         ])
         .run(tauri::generate_context!())
         .expect("GNNUHub 桌面应用启动失败");
