@@ -102,7 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- 3. 票据交换：手动跟随重定向链（最多 5 跳）----
     println!("[3] caslogin.do?ticket 票据交换...");
     let mut url = format!("{GNIO_BASE}{CAS_LOGIN}?ticket={ticket}");
-    let mut final_body = String::new();
     for hop in 1..=5 {
         let resp = http.get(&url).send().await?;
         let status = resp.status();
@@ -132,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
             }
             _ => {
-                final_body = resp.text().await?;
+                let final_body = resp.text().await?;
                 let _ = std::fs::write(format!("{OUT_DIR}/portal_landing.html"), &final_body);
                 println!(
                     "      落地页 {} 字节，已存档 portal_landing.html",
