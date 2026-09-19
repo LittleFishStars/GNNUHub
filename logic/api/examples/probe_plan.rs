@@ -71,10 +71,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "    {} 字节，{}",
                 body.len(),
-                if is_json { "JSON 响应" } else { "HTML 页面" }
+                if is_json {
+                    "JSON 响应"
+                } else {
+                    "HTML 页面"
+                }
             );
             if is_json {
-                println!("    开头 {}", body.trim().chars().take(200).collect::<String>());
+                println!(
+                    "    开头 {}",
+                    body.trim().chars().take(200).collect::<String>()
+                );
             } else {
                 // 提取表格行数
                 let rows = body.matches("<tr").count();

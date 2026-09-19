@@ -65,6 +65,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "    正文 {} 字节，已存档 notice_content.html",
             content.len()
         );
+
+        // 解析实测（与桌面端同路径）
+        match gnnuhub_api::parse::parse_notice_detail(&content) {
+            Ok(d) => {
+                println!("    解析成功:");
+                println!("      标题: {}", d.title);
+                println!(
+                    "      发布人: {}，时间: {}，浏览: {}",
+                    d.publisher, d.publish_time, d.views
+                );
+                println!(
+                    "      正文前 120 字: {}",
+                    d.content.chars().take(120).collect::<String>()
+                );
+            }
+            Err(e) => println!("    ❌ 解析失败: {e}"),
+        }
     }
 
     // ---- 空闲教室 ----
