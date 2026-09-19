@@ -20,7 +20,9 @@
 //!   识别失败由登录流程自动重试。
 
 use gnnuhub_service::HubService;
-use gnnuhub_service::model::{AcademicTerm, ClassSchedule, ExamRecord, StudentInfo, Term};
+use gnnuhub_service::model::{
+    AcademicTerm, ClassSchedule, ExamRecord, RetakeCourse, StudentInfo, Term,
+};
 
 /// Tauri 命令的统一返回类型
 ///
@@ -92,6 +94,17 @@ async fn this_week(state: tauri::State<'_, HubService>) -> CmdResult<u8> {
     state.this_week().await.map_err(cmd_error)
 }
 
+/// 拉取重修课程库
+#[tauri::command]
+async fn retake_courses(
+    state: tauri::State<'_, HubService>,
+    year: u16,
+    term: u8,
+) -> CmdResult<Vec<RetakeCourse>> {
+    let term = academic_term(year, term)?;
+    state.retake_courses(term).await.map_err(cmd_error)
+}
+
 /// 获取考试安排
 ///
 /// 实测服务端不按学期过滤、返回学生全部考试记录；学期参数仅作为
@@ -132,6 +145,7 @@ pub fn run() {
             class_schedule,
             this_week,
             exam_schedule,
+            retake_courses,
         ])
         .run(tauri::generate_context!())
         .expect("GNNUHub 桌面应用启动失败");

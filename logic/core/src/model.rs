@@ -552,6 +552,32 @@ impl ExamRecord {
     }
 }
 
+/// 一条重修课程记录
+///
+/// 来自「重修课程查询」（`cxkccx_cxCxkccxIndex.html`，模块码
+/// N255720）——历史上开设过重修的课程库。实测服务端不按学年
+/// 学期过滤，返回全部重修课程记录；`academic_year` / `semester`
+/// 为该重修批次对应的学年学期（接口原文）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RetakeCourse {
+    /// 课程代码
+    pub course_code: String,
+    /// 课程名称
+    pub course_name: String,
+    /// 学分
+    pub credit: f32,
+    /// 开课学院
+    pub college: String,
+    /// 课程类别
+    pub category: String,
+    /// 重修状态（接口原文，例如「空」表示未开班）
+    pub retake_status: String,
+    /// 重修学年（原文，例如 `"2020-2021"`）
+    pub academic_year: String,
+    /// 重修学期（原文，例如 `"1"`）
+    pub semester: String,
+}
+
 /// 一天中的节次时间（第一节几点开始、第几节几点结束）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeriodTime {

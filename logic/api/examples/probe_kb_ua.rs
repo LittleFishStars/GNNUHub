@@ -62,6 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("    登录成功: {}\n", session.student_id());
 
+    // 重修课程库实测（新功能的接口验证）
+    match session
+        .retake_courses(gnnuhub_core::model::AcademicTerm::first(2026))
+        .await
+    {
+        Ok(courses) => println!("    重修课程库: {} 条 ✅", courses.len()),
+        Err(e) => println!("    重修课程库: ❌ {e}"),
+    }
+
     // 把本会话 Cookie 落盘，供 Python 侧对照实验使用
     let cookies: serde_json::Map<String, serde_json::Value> = session
         .cookies()

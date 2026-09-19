@@ -187,6 +187,17 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取重修课程库
+    ///
+    /// 实测服务端不按学期过滤、返回全部重修课程记录；学期参数仅作
+    /// 为缓存分桶的键。
+    pub async fn retake_courses(
+        &self,
+        term: AcademicTerm,
+    ) -> std::result::Result<Vec<model::RetakeCourse>, ServiceError> {
+        Ok(self.active_session().await?.retake_courses(term).await?)
+    }
+
     /// 获取考试安排
     ///
     /// 实测服务端不按学期过滤、返回学生全部考试记录；学期参数仅作

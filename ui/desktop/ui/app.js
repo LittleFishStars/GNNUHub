@@ -229,6 +229,65 @@ async function loadExams() {
   });
 }
 
+/* ---------- 重修课程 ---------- */
+
+function renderRetakes(courses) {
+  const wrap = $("retake-list");
+  wrap.innerHTML = "";
+
+  if (!courses.length) {
+    wrap.innerHTML = '<div class="empty-tip">暂无重修课程记录</div>';
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "exam-table";
+  table.innerHTML =
+    "<thead><tr><th>课程</th><th>学分</th><th>开课学院</th><th>类别</th>" +
+    "<th>重修学年</th><th>学期</th><th>状态</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+
+  for (const c of courses) {
+    const tr = document.createElement("tr");
+    const cells = [
+      [c.course_name, c.course_code],
+      [String(c.credit)],
+      [c.college],
+      [c.category],
+      [c.academic_year],
+      [c.semester === "1" ? "第一学期" : c.semester === "2" ? "第二学期" : c.semester],
+      [c.retake_status || "—"],
+    ];
+    for (const [main, sub] of cells) {
+      const td = document.createElement("td");
+      td.textContent = main || "—";
+      if (sub) {
+        const small = document.createElement("div");
+        small.className = "sub";
+        small.textContent = sub;
+        td.appendChild(small);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+async function loadRetakes() {
+  const year = Number($("sel-retake-year").value);
+  const term = Number($("sel-retake-term").value);
+
+  await withBusy("查询重修课程库", async () => {
+    clearPanelError("tab-retakes");
+    const courses = await invoke("retake_courses", { year, term });
+    renderRetakes(courses);
+    setStatus(`重修课程库已更新（${courses.length} 条）`);
+  });
+}
+
 /* ---------- 学籍渲染 ---------- */
 
 const PROFILE_FIELDS = [
@@ -353,6 +412,9 @@ $("btn-load-schedule").addEventListener("click", (ev) =>
 $("btn-load-exams").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadExams()).catch(() => {}));
 
+$("btn-load-retakes").addEventListener("click", (ev) =>
+    withButton(ev.currentTarget, () => loadRetakes()).catch(() => {}));
+
 $("btn-this-week").addEventListener("click", async () => {
   try {
     const week = await invoke("this_week");
@@ -382,6 +444,9 @@ document.querySelectorAll(".tab").forEach((btn) => {
     }
     if (btn.dataset.tab === "exams" && !$("exam-list").childElementCount) {
       loadExams().catch(() => {});
+    }
+    if (btn.dataset.tab === "retakes" && !$("retake-list").childElementCount) {
+      loadRetakes().catch(() => {});
     }
   });
 });

@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use gnnuhub_core::model::{AcademicTerm, ClassSchedule, ExamRecord, PeriodTime, StudentInfo};
+use gnnuhub_core::model::{
+    AcademicTerm, ClassSchedule, ExamRecord, PeriodTime, RetakeCourse, StudentInfo,
+};
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
 use crate::client::Client;
@@ -29,6 +31,8 @@ struct SessionState {
     schedules: HashMap<AcademicTerm, ClassSchedule>,
     /// 按学年学期缓存的考试安排
     exams: HashMap<AcademicTerm, Vec<ExamRecord>>,
+    /// 按学年学期分桶缓存的重修课程库
+    retakes: HashMap<AcademicTerm, Vec<RetakeCourse>>,
     /// 节次时间表
     timetable: Option<Vec<PeriodTime>>,
     /// 当前教学周
@@ -425,6 +429,46 @@ impl Session {
         let mut state = self.state.lock().await;
         state.exams.insert(term, exams.clone());
         Ok(exams)
+    }
+
+    /// 拉取重修课程库
+    ///
+    /// 对应「重修课程查询」（`cxkccx_cxCxkccxIndex.html`，模块码
+    /// N255720），2026-09-18 实测 4312 条课程记录。实测服务端
+    /// **不按 `cxxnm`/`cxxqm` 过滤**，返回全部重修课程记录；
+    /// 学期参数仅作为缓存分桶的键。
+    pub async fn retake_courses(&self, term: AcademicTerm) -> Result<Vec<RetakeCourse>> {
+        {
+            let state = self.state.lock().await;
+            if let Some(cached) = state.retakes.get(&term) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let year_str = term.as_xnm();
+        let xqm_str = term.as_xqm().to_string();
+        let form = [
+            ("cxxnm", year_str.as_str()),
+            ("cxxqm", xqm_str.as_str()),
+            ("kkbm_id", ""),
+            ("kclbdm", ""),
+            ("bxqsfkk_cx", ""),
+            ("kkxb_id", ""),
+            ("kch", ""),
+        ];
+
+        let body = self
+            .post_form(
+                "/cxkccx/cxkccx_cxCxkccxIndex.html",
+                &[("gnmkdm", "N255720"), ("doType", "query")],
+                &form,
+            )
+            .await?;
+
+        let courses = parse::parse_retake_courses(&body)?;
+        let mut state = self.state.lock().await;
+        state.retakes.insert(term, courses.clone());
+        Ok(courses)
     }
 
     /// 获取当前教学周
