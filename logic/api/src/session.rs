@@ -15,8 +15,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{
-    AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, PeriodTime,
-    RetakeCourse, StudentInfo,
+    AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, NoticeDetail,
+    PeriodTime, RetakeCourse, StudentInfo,
 };
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
@@ -474,6 +474,15 @@ impl Session {
         let mut state = self.state.lock().await;
         state.retakes.insert(term, courses.clone());
         Ok(courses)
+    }
+
+    /// 拉取通知详情正文
+    ///
+    /// `detail_path` 为 [`Session::notices`] 返回的详情页站内路径
+    /// （含 `xwbh` 编号）。
+    pub async fn notice_content(&self, detail_path: &str) -> Result<NoticeDetail> {
+        let body = self.fetch_raw(detail_path).await?;
+        parse::parse_notice_detail(&body)
     }
 
     /// 拉取校历（当前学期起止日期）

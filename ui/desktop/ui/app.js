@@ -329,6 +329,8 @@ async function loadNotices() {
       const tbody = document.createElement("tbody");
       for (const n of notices) {
         const tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.title = "点击查看正文";
         if (n.pinned) tr.classList.add("pinned");
 
         const titleTd = document.createElement("td");
@@ -338,6 +340,32 @@ async function loadNotices() {
         const dateTd = document.createElement("td");
         dateTd.textContent = n.date || "—";
         tr.append(titleTd, catTd, dateTd);
+
+        // 点击行：展开/收起正文
+        tr.addEventListener("click", async () => {
+          const existing = tr.nextElementSibling;
+          if (existing && existing.classList.contains("notice-detail-row")) {
+            existing.remove();
+            return;
+          }
+          const detailRow = document.createElement("tr");
+          detailRow.className = "notice-detail-row";
+          const detailTd = document.createElement("td");
+          detailTd.colSpan = 3;
+          detailTd.textContent = "加载中…";
+          tr.after(detailRow);
+
+          try {
+            const d = await invoke("notice_content", { detailPath: n.detail_path });
+            detailTd.innerHTML =
+              `<div class="notice-meta">${d.publisher} · ${d.publish_time} · 浏览 ${d.views}</div>` +
+              `<div class="notice-body"></div>`;
+            detailTd.querySelector(".notice-body").textContent = d.content;
+          } catch (e) {
+            detailTd.textContent = "加载失败：" + e;
+          }
+        });
+
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);

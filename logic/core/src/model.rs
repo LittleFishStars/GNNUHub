@@ -639,6 +639,25 @@ pub struct Notice {
     pub category: String,
 }
 
+/// 通知详情
+///
+/// 来自通知正文页（`xwck_ckXw.html?xwbh=...`）。`content` 为
+/// 正文纯文本（富文本去标签后的内容，图片以 `图片: <路径>` 形式
+/// 内联标注）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoticeDetail {
+    /// 标题
+    pub title: String,
+    /// 发布人
+    pub publisher: String,
+    /// 发布时间（原文，含时分秒）
+    pub publish_time: String,
+    /// 浏览人数
+    pub views: String,
+    /// 正文纯文本
+    pub content: String,
+}
+
 /// 一条重修课程记录
 ///
 /// 来自「重修课程查询」（`cxkccx_cxCxkccxIndex.html`，模块码

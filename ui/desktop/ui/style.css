@@ -325,3 +325,21 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .exam-table tr.pinned td:first-child { font-weight: 600; color: var(--primary-dark); }
+
+/* 通知正文展开行 */
+.notice-detail-row td {
+  background: #f8fafd;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notice-detail-row .notice-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.notice-detail-row .notice-body {
+  line-height: 1.7;
+  font-size: 13px;
+}

@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 
 use gnnuhub_core::model::{
     AcademicCalendar, AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord,
-    GpaSummary, GradeRecord, Notice, PeriodRange, PeriodTime, RetakeCourse, StudentInfo,
-    parse_credit,
+    GpaSummary, GradeRecord, Notice, NoticeDetail, PeriodRange, PeriodTime, RetakeCourse,
+    StudentInfo, parse_credit,
 };
 use gnnuhub_core::{Error, Result};
 use serde::Deserialize;
@@ -835,6 +835,88 @@ pub fn parse_system_messages(body: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// 解析通知正文页（`xwck_ckXw.html?xwbh=...`）
+///
+/// 页面结构：`h3.text-center` 标题、`h5.news_title1` 内的三个
+/// `span`（发布人/发布时间/浏览人数，`key：value` 形式）、
+/// `div.news_con` 正文富文本。
+pub fn parse_notice_detail(html: &str) -> Result<NoticeDetail> {
+    let doc = scraper::Html::parse_document(html);
+    let text_of = |sel: &str| -> String {
+        match selector(sel) {
+            Ok(sel) => doc
+                .select(&sel)
+                .next()
+                .map(|el| el.text().collect::<String>())
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    };
+
+    let title = text_of("h3.text-center").trim().to_string();
+
+    // 发布信息：h5.news_title1 的 span 文本，按「：」拆键值
+    let mut publisher = String::new();
+    let mut publish_time = String::new();
+    let mut views = String::new();
+    if let Ok(meta_sel) = selector("h5.news_title1 span") {
+        for el in doc.select(&meta_sel) {
+            let span = el.text().collect::<String>();
+            let span = span.trim();
+            if let Some(v) = span.strip_prefix("发布人：") {
+                publisher = v.trim().to_string();
+            } else if let Some(v) = span.strip_prefix("发布时间：") {
+                publish_time = v.trim().to_string();
+            } else if let Some(v) = span.strip_prefix("浏览人数：") {
+                views = v.trim().to_string();
+            }
+        }
+    }
+
+    // 正文：news_con 内提取纯文本，图片位置标注为「图片: <路径>」
+    let con = doc
+        .select(&selector("div.news_con")?)
+        .next()
+        .ok_or_else(|| Error::PageParse("通知正文页缺少 news_con 容器".to_string()))?;
+
+    let mut content = String::new();
+    for node in con.descendants() {
+        match node.value() {
+            scraper::Node::Text(t) => {
+                let seg = t.text.trim();
+                if !seg.is_empty() {
+                    content.push_str(seg);
+                    content.push(' ');
+                }
+            }
+            scraper::Node::Element(el) if el.name() == "img" => {
+                if let Some(src) = el.attr("src") {
+                    content.push_str(&format!("图片: {src} "));
+                }
+            }
+            scraper::Node::Element(el) if matches!(el.name(), "p" | "br" | "div" | "tr") => {
+                content.push('\n');
+            }
+            _ => {}
+        }
+    }
+    // 压缩空白：按行去多余空格，丢弃空行
+    let content = content
+        .split('\n')
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(NoticeDetail {
+        title,
+        publisher,
+        publish_time,
+        views,
+        content,
+    })
+}
+
 /// 从首页校历组件（`index_cxAreaFive.html`）解析学年学期信息
 ///
 /// 页面为服务端渲染文本，学期信息形如
@@ -1460,6 +1542,31 @@ mod tests {
         assert!(!second.pinned);
         assert_eq!(second.title, "关于转专业计划的通...");
         assert_eq!(second.date, "2026-09-01");
+    }
+
+    /// 通知正文解析（脱敏夹具，DOM 对齐实测响应）
+    #[test]
+    fn parses_notice_detail() {
+        let html = r#"<html><head><title>通知详情</title></head><body>
+          <h3 class="text-center">【学生】教务系统使用说明</h3>
+          <h5 class="text-center news_title1">
+            <span>发布人：温老师</span>
+            <span>发布时间：2020-12-31 08:56:24</span>
+            <span>浏览人数：10577</span>
+          </h5>
+          <div class="news_con">
+            <p>第一段说明文字。</p>
+            <p>第二段：<img src="/upload/pic.png" />附图说明。</p>
+          </div>
+        </body></html>"#;
+        let d = parse_notice_detail(html).unwrap();
+        assert_eq!(d.title, "【学生】教务系统使用说明");
+        assert_eq!(d.publisher, "温老师");
+        assert_eq!(d.publish_time, "2020-12-31 08:56:24");
+        assert_eq!(d.views, "10577");
+        assert!(d.content.contains("第一段说明文字。"), "{}", d.content);
+        assert!(d.content.contains("第二段："), "{}", d.content);
+        assert!(d.content.contains("图片: /upload/pic.png"), "{}", d.content);
     }
 
     /// 校历解析（夹具文本对齐首页 AreaFive 实测渲染）

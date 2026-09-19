@@ -187,6 +187,18 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取通知详情正文
+    pub async fn notice_content(
+        &self,
+        detail_path: &str,
+    ) -> std::result::Result<model::NoticeDetail, ServiceError> {
+        Ok(self
+            .active_session()
+            .await?
+            .notice_content(detail_path)
+            .await?)
+    }
+
     /// 拉取校历（当前学期起止日期；可用 [`model::AcademicCalendar::
     /// current_week`] 从日期推算当前教学周）
     pub async fn academic_calendar(
