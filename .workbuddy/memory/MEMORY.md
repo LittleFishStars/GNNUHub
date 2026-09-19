@@ -156,8 +156,11 @@
   混杂变量污染；「借用浏览器 Cookie 被 901 拦截」是指纹突变所致，
   与课表问题无关。**对照实验必须先验证已知成功基底（Python 版）
   在当前时点仍成功**。
-  **推论：移动端课表接口 `xskbcxMobile_cxXsKb`「失效」的判断
-  存疑**（当年实验同样走 GET），需要按周远程查询时用 POST 重验。
+  **✅ 已重验（2026-09-19）：移动端课表接口 `xskbcxMobile_cxXsKb`
+  POST（xnm/xqm/zs/doType=app/kblx/xh）返回完整单周课表 JSON
+  （25KB，kbList 结构与主课表一致）——此前「失效」判断同样是
+  GET 方法 bug 的误判**。客户端过滤方案已上线故暂不切换，但按周
+  远程查询可用它兜底。
   HTTP 栈最终形态：reqwest + native-tls（系统 OpenSSL，与 Python
   参考实现对齐）；wreq/BoringSSL 浏览器仿真系基于错误根因的尝试，
   已回退（编译重且非必需）。UA 用诚实标识 `gnnuhub/<版本>`
