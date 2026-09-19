@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
-    let _ = std::fs::write(
+    std::fs::write(
         ".scratch/rust_session_cookies.json",
         serde_json::to_string_pretty(&cookies)?,
     );
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body = session
         .fetch_raw("/xsxy/xsxyqk_cxKczxAllIndex.html?gnmkdm=N105515&xh_id=")
         .await?;
-    let _ = std::fs::write(format!("{OUT_DIR}/pages/gpa_kczx_all.html"), &body)?;
+    std::fs::write(format!("{OUT_DIR}/pages/gpa_kczx_all.html"), &body)?;
     println!("    {} 字节，已存档 gpa_kczx_all.html", body.len());
 
     // 摘要：提取表格行文本
