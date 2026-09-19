@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
-    std::fs::write(
+    let _ = std::fs::write(
         ".scratch/rust_session_cookies.json",
         serde_json::to_string_pretty(&cookies)?,
     );
