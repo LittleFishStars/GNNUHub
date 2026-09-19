@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(body) => {
-            let _ = std::fs::write(format!("{OUT_DIR}/pages/plan_index.html"), &body)?;
+            std::fs::write(format!("{OUT_DIR}/pages/plan_index.html"), &body)?;
             let is_json = body.trim().starts_with('{') || body.trim().starts_with('[');
             println!(
                 "    {} 字节，{}",
@@ -111,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(body) => {
-            let _ = std::fs::write(format!("{OUT_DIR}/pages/kb_mobile_post.json"), &body)?;
+            std::fs::write(format!("{OUT_DIR}/pages/kb_mobile_post.json"), &body)?;
             let t = body.trim();
             println!(
                 "    {} 字节，开头 {}",
