@@ -215,6 +215,7 @@ pub fn run() {
             gpa_summary,
             free_rooms,
             academic_calendar,
+            timetable,
         ])
         .run(tauri::generate_context!())
         .expect("GNNUHub 桌面应用启动失败");
