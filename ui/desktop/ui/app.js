@@ -371,7 +371,8 @@ async function loadNotices() {
       table.appendChild(tbody);
       wrap.appendChild(table);
     }
-    setStatus(`通知已更新（${notices.length} 条）`);
+    // 版本标记：用于确认前端资源是否随构建更新（点击展开正文为 v2 特性）
+    setStatus(`通知已更新（${notices.length} 条）· 通知模块 v2（点击行查看正文）`);
   });
 }
 
