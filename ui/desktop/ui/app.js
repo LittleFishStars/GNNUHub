@@ -297,11 +297,15 @@ async function loadRooms() {
     const range = weekDateRange(cal, week);
 
     // 节次时间表：节次 → 时段
-    const periods = await invoke("timetable", { year, term }).catch(() => []);
+    const periods = await invoke("timetable", { year, term }).catch((e) => {
+      setStatus("节次时间表获取失败，使用默认时段", true);
+      return [];
+    });
     const times = periodTimeRange(periods, jcStart, jcEnd);
 
     $("room-range").textContent = `第 ${week} 周（${range.qssj} ~ ${range.jssj}）· 第 ${jcStart}-${jcEnd} 节（${times.qssd.slice(0, 5)} ~ ${times.jssd.slice(0, 5)}）`;
 
+    setStatus("查询空闲教室数据…");
     const rooms = await invoke("free_rooms", {
       year, term,
       qssj: range.qssj,
