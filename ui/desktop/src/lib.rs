@@ -22,7 +22,7 @@
 use gnnuhub_service::HubService;
 use gnnuhub_service::model::{
     AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, FreeRoom, GpaSummary, Notice,
-    NoticeDetail, RetakeCourse, StudentInfo, Term,
+    NoticeDetail, PeriodTime, RetakeCourse, StudentInfo, Term,
 };
 
 /// Tauri 命令的统一返回类型
@@ -132,6 +132,17 @@ async fn academic_calendar(state: tauri::State<'_, HubService>) -> CmdResult<Aca
 #[tauri::command]
 async fn gpa_summary(state: tauri::State<'_, HubService>) -> CmdResult<Vec<GpaSummary>> {
     state.gpa_summary().await.map_err(cmd_error)
+}
+
+/// 拉取节次时间表（第 N 节的起止时间）
+#[tauri::command]
+async fn timetable(
+    state: tauri::State<'_, HubService>,
+    year: u16,
+    term: u8,
+) -> CmdResult<Vec<PeriodTime>> {
+    let term = academic_term(year, term)?;
+    state.timetable(term).await.map_err(cmd_error)
 }
 
 /// 拉取首页通知公告列表

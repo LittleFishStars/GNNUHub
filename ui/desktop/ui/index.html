@@ -101,9 +101,24 @@
     <!-- 空闲教室 -->
     <div id="tab-rooms" class="tab-panel hidden">
       <div class="controls">
-        <label>日期 <input id="room-date" type="date" class="room-input"></label>
-        <label>时段 <input id="room-qssd" type="time" class="room-input" value="08:00"> —
-                       <input id="room-jssd" type="time" class="room-input" value="22:00"></label>
+        <label>学期
+          <select id="sel-room-year">
+            <option value="2024">2024-2025</option>
+            <option value="2025">2025-2026</option>
+            <option value="2026" selected>2026-2027</option>
+          </select>
+          <select id="sel-room-term">
+            <option value="1" selected>第一学期</option>
+            <option value="2">第二学期</option>
+          </select>
+        </label>
+        <label>周次
+          <select id="sel-room-week"></select>
+        </label>
+        <label>节次
+          <select id="sel-room-jc-start"></select> —
+          <select id="sel-room-jc-end"></select>
+        </label>
         <label>类别
           <select id="sel-room-cat">
             <option value="">全部</option>
@@ -111,6 +126,7 @@
         </label>
         <button id="btn-load-rooms" class="primary small">查询</button>
       </div>
+      <div id="room-range" class="hint" style="margin-bottom:10px;"></div>
       <div id="room-list"></div>
     </div>
 

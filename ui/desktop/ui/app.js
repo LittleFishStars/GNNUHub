@@ -229,8 +229,109 @@ async function loadExams() {
   });
 }
 
-/* ---------- 空闲教室 ---------- */
+/* ---------- 空闲教室（学期+周次+节次） ---------- */
 
+/** 初始化周次（1-25）与节次（1-11）下拉 */
+function initRoomSelectors() {
+  const week = $("sel-room-week");
+  if (!week.options.length) {
+    for (let w = 1; w <= 25; w++) {
+      const o = document.createElement("option");
+      o.value = String(w);
+      o.textContent = `第 ${w} 周`;
+      week.appendChild(o);
+    }
+    week.value = "3"; // 当前周附近，用户可改
+  }
+  for (const sel of [$("sel-room-jc-start"), $("sel-room-jc-end")]) {
+    if (sel.options.length) continue;
+    for (let j = 1; j <= 11; j++) {
+      const o = document.createElement("option");
+      o.value = String(j);
+      o.textContent = `第 ${j} 节`;
+      sel.appendChild(o);
+    }
+  }
+  $("sel-room-jc-start").value = "1";
+  $("sel-room-jc-end").value = "11";
+}
+
+/** 学期起始周一（UTC 日期，避免时区偏移） */
+function termStartUtc(cal) {
+  const [y, m, d] = cal.start_date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+/** 第 w 周的周一与周日（YYYY-MM-DD，UTC 计算） */
+function weekDateRange(cal, w) {
+  const base = termStartUtc(cal);
+  const monday = new Date(base.getTime() + (w - 1) * 7 * 86400000);
+  const sunday = new Date(monday.getTime() + 6 * 86400000);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  return { qssj: fmt(monday), jssj: fmt(sunday) };
+}
+
+/** 节次起止时段（timetable[0..n] 的 start/end，补秒） */
+function periodTimeRange(periods, jcStart, jcEnd) {
+  const first = periods[Math.min(jcStart, periods.length) - 1];
+  const last = periods[Math.min(jcEnd, periods.length) - 1];
+  return {
+    qssd: (first?.start ?? "08:00") + ":00",
+    jssd: (last?.end ?? "21:25") + ":00",
+  };
+}
+
+async function loadRooms() {
+  const year = Number($("sel-room-year").value);
+  const term = Number($("sel-room-term").value);
+  const week = Number($("sel-room-week").value);
+  const jcStart = Number($("sel-room-jc-start").value);
+  const jcEnd = Number($("sel-room-jc-end").value);
+
+  await withBusy("查询空闲教室", async () => {
+    clearPanelError("tab-rooms");
+
+    // 校历：学期起始日 → 周次换算日期（校历组件只提供当前学期；
+    // 选择历史学期时按其学期名近似换算，起始日沿用当前校历）
+    const cal = await invoke("academic_calendar");
+    const range = weekDateRange(cal, week);
+
+    // 节次时间表：节次 → 时段
+    const periods = await invoke("timetable", { year, term }).catch(() => []);
+    const times = periodTimeRange(periods, jcStart, jcEnd);
+
+    $("room-range").textContent = `第 ${week} 周（${range.qssj} ~ ${range.jssj}）· 第 ${jcStart}-${jcEnd} 节（${times.qssd.slice(0, 5)} ~ ${times.jssd.slice(0, 5)}）`;
+
+    const rooms = await invoke("free_rooms", {
+      year, term,
+      qssj: range.qssj,
+      jssj: range.jssj,
+      qssd: times.qssd,
+      jssd: times.jssd,
+    });
+
+    fillRoomCategories(rooms);
+    const cat = $("sel-room-cat").value;
+    const filtered = cat ? rooms.filter((r) => r.category === cat) : rooms;
+    renderRooms(filtered);
+    setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${rooms.length} 间）`);
+  });
+}
+
+/** 填充类别下拉（首次查询后按数据去重生成） */
+function fillRoomCategories(rooms) {
+  const sel = $("sel-room-cat");
+  if (sel.options.length > 1) return;
+  const cats = [...new Set(rooms.map((r) => r.category).filter(Boolean))].sort();
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  }
+}
+
+/** 渲染教室表格 */
 function renderRooms(rooms) {
   const wrap = $("room-list");
   wrap.innerHTML = "";
@@ -267,46 +368,6 @@ function renderRooms(rooms) {
   }
   table.appendChild(tbody);
   wrap.appendChild(table);
-}
-
-/** 填充类别下拉（首次查询后按数据去重生成） */
-function fillRoomCategories(rooms) {
-  const sel = $("sel-room-cat");
-  if (sel.options.length > 1) return; // 已填充
-  const cats = [...new Set(rooms.map((r) => r.category).filter(Boolean))].sort();
-  for (const c of cats) {
-    const opt = document.createElement("option");
-    opt.value = c;
-    opt.textContent = c;
-    sel.appendChild(opt);
-  }
-}
-
-async function loadRooms() {
-  const date = $("room-date").value;
-  const qssd = $("room-qssd").value;
-  const jssd = $("room-jssd").value;
-  if (!date) {
-    setStatus("请先选择日期", true);
-    return;
-  }
-
-  await withBusy("查询空闲教室", async () => {
-    clearPanelError("tab-rooms");
-    const rooms = await invoke("free_rooms", {
-      year: Number($("sel-year").value),
-      term: Number($("sel-term").value),
-      qssj: date,
-      jssj: date,
-      qssd: qssd + ":00",
-      jssd: jssd + ":00",
-    });
-    fillRoomCategories(rooms);
-    const cat = $("sel-room-cat").value;
-    const filtered = cat ? rooms.filter((r) => r.category === cat) : rooms;
-    renderRooms(filtered);
-    setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${rooms.length} 间）`);
-  });
 }
 
 /* ---------- 学业情况（GPA） ---------- */
@@ -657,10 +718,7 @@ $("btn-load-rooms").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadRooms()).catch(() => {}));
 
 $("sel-room-cat").addEventListener("change", () => {
-  // 类别切换：前端过滤已渲染数据，不打接口
-  const table = $("room-list").querySelector("tbody");
-  if (!table) return;
-  // 简单方案：重新触发一次渲染由 loadRooms 处理，这里直接重查
+  // 类别切换：仅前端过滤，需要重查时手动点查询
   loadRooms().catch(() => {});
 });
 
@@ -704,7 +762,7 @@ document.querySelectorAll(".tab").forEach((btn) => {
       loadAcademic().catch(() => {});
     }
     if (btn.dataset.tab === "rooms" && !$("room-list").childElementCount) {
-      $("room-date").value = new Date().toISOString().slice(0, 10);
+      initRoomSelectors();
       loadRooms().catch(() => {});
     }
   });

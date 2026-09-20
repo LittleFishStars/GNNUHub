@@ -206,6 +206,14 @@ impl HubService {
             .await?)
     }
 
+    /// 拉取节次时间表（第 N 节的起止时间）
+    pub async fn timetable(
+        &self,
+        term: AcademicTerm,
+    ) -> std::result::Result<Vec<model::PeriodTime>, ServiceError> {
+        Ok(self.active_session().await?.timetable(term).await?)
+    }
+
     /// 拉取通知详情正文
     pub async fn notice_content(
         &self,
