@@ -98,6 +98,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => println!("\n校历: ❌ {e}"),
     }
 
+    // 空闲教室实测（jyfs 修复后的 session 路径验证）
+    match session
+        .free_rooms(
+            gnnuhub_core::model::AcademicTerm::first(2026),
+            "2026-09-21",
+            "2026-09-25",
+            "08:00:00",
+            "22:00:00",
+        )
+        .await
+    {
+        Ok(rooms) => {
+            println!(
+                "\n空闲教室: {} 条 ✅（首条 {}）",
+                rooms.len(),
+                rooms.first().map(|r| r.name.as_str()).unwrap_or("-")
+            );
+        }
+        Err(e) => println!("\n空闲教室: ❌ {e}"),
+    }
+
     // 顺带验证重修课程（回归）
     match session.retake_courses(AcademicTerm::first(2026)).await {
         Ok(c) => println!("回归：重修课程库 {} 条 ✅", c.len()),
