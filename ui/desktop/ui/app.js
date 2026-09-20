@@ -314,25 +314,40 @@ async function loadRooms() {
       jssd: times.jssd,
     });
 
+    lastRooms = rooms;
     fillRoomCategories(rooms);
-    const cat = $("sel-room-cat").value;
-    const filtered = cat ? rooms.filter((r) => r.category === cat) : rooms;
-    renderRooms(filtered);
-    setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${rooms.length} 间）`);
+    applyRoomFilters();
   });
 }
 
-/** 填充类别下拉（首次查询后按数据去重生成） */
+/** 填充类别/楼栋下拉（首次查询后按数据去重生成） */
 function fillRoomCategories(rooms) {
-  const sel = $("sel-room-cat");
-  if (sel.options.length > 1) return;
-  const cats = [...new Set(rooms.map((r) => r.category).filter(Boolean))].sort();
-  for (const c of cats) {
-    const opt = document.createElement("option");
-    opt.value = c;
-    opt.textContent = c;
-    sel.appendChild(opt);
-  }
+  const fill = (sel, key) => {
+    if (sel.options.length > 1) return; // 已填充
+    const values = [...new Set(rooms.map((r) => r[key]).filter(Boolean))].sort();
+    for (const v of values) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      sel.appendChild(opt);
+    }
+  };
+  fill($("sel-room-cat"), "category");
+  fill($("sel-room-building"), "building");
+}
+
+/** 最近一次查询的结果（类别/楼栋筛选在此之上做纯前端过滤） */
+let lastRooms = [];
+
+/** 按类别+楼栋过滤并渲染 */
+function applyRoomFilters() {
+  const cat = $("sel-room-cat").value;
+  const bld = $("sel-room-building").value;
+  const filtered = lastRooms.filter(
+    (r) => (!cat || r.category === cat) && (!bld || r.building === bld)
+  );
+  renderRooms(filtered);
+  setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${lastRooms.length} 间）`);
 }
 
 /** 渲染教室表格 */
@@ -721,10 +736,9 @@ $("btn-load-notices").addEventListener("click", (ev) =>
 $("btn-load-rooms").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadRooms()).catch(() => {}));
 
-$("sel-room-cat").addEventListener("change", () => {
-  // 类别切换：仅前端过滤，需要重查时手动点查询
-  loadRooms().catch(() => {});
-});
+// 类别/楼栋切换：纯前端过滤，不打接口
+$("sel-room-cat").addEventListener("change", applyRoomFilters);
+$("sel-room-building").addEventListener("change", applyRoomFilters);
 
 $("btn-this-week").addEventListener("click", async () => {
   try {
