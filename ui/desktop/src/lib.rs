@@ -105,10 +105,12 @@ async fn free_rooms(
     jssj: String,
     qssd: String,
     jssd: String,
+    lh: String,
+    cdlb_id: String,
 ) -> CmdResult<Vec<FreeRoom>> {
     let term = academic_term(year, term)?;
     state
-        .free_rooms(term, &qssj, &jssj, &qssd, &jssd)
+        .free_rooms(term, &qssj, &jssj, &qssd, &jssd, &lh, &cdlb_id)
         .await
         .map_err(cmd_error)
 }

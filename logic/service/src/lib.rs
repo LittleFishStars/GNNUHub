@@ -198,11 +198,13 @@ impl HubService {
         jssj: &str,
         qssd: &str,
         jssd: &str,
+        lh: &str,
+        cdlb_id: &str,
     ) -> std::result::Result<Vec<model::FreeRoom>, ServiceError> {
         Ok(self
             .active_session()
             .await?
-            .free_rooms(term, qssj, jssj, qssd, jssd)
+            .free_rooms(term, qssj, jssj, qssd, jssd, lh, cdlb_id)
             .await?)
     }
 

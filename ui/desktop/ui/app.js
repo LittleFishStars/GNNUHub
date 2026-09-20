@@ -229,10 +229,53 @@ async function loadExams() {
   });
 }
 
-/* ---------- 空闲教室（学期+周次+节次） ---------- */
+/* ---------- 空闲教室（学期+周次+节次+楼栋/类别服务端筛选） ---------- */
 
-/** 初始化周次（1-25）与节次（1-11）下拉 */
+// 楼栋编码表（教务系统空闲教室页下拉实录，value=lh 编码）
+const ROOM_BUILDINGS = [
+  ["01", "博学楼(1教)"],
+  ["02", "博雅楼(2教)"],
+  ["03", "博爱楼(3教)"],
+  ["04", "博文楼(4教)"],
+  ["05", "达真楼(5教)"],
+  ["06", "达理楼(6教)"],
+  ["07", "达智楼(7教)"],
+  ["08", "卓越楼(8教)"],
+  ["09", "卓远楼(9教)"],
+  ["10", "卓尔楼(10教)"],
+  ["11", "逸夫楼(11教)"],
+  ["15", "体毅楼(体院)"],
+  ["16", "达美楼(美院)"],
+  ["17", "达乐楼(音乐)"],
+  ["18", "人文科技中心"],
+  ["19", "蓉江运动场"],
+  ["wlh", "无楼号"],
+];
+
+// 教室类别编码表（value=cdlb_id 编码）
+const ROOM_CATEGORIES = [
+  ["1", "多媒体教室"],
+  ["2", "普通教室"],
+  ["3", "智慧教室"],
+  ["4", "专用教室"],
+  ["5", "实验室"],
+  ["6", "实训室"],
+];
+
+/** 初始化教室 tab 的静态下拉与周次（1-25）/节次（1-11） */
 function initRoomSelectors() {
+  const fill = (sel, entries) => {
+    sel.innerHTML = "";
+    for (const [v, label] of entries) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = label;
+      sel.appendChild(o);
+    }
+  };
+  fill($("sel-room-building"), [["", "全部楼栋"], ...ROOM_BUILDINGS]);
+  fill($("sel-room-cat"), [["", "全部类别"], ...ROOM_CATEGORIES]);
+
   const week = $("sel-room-week");
   if (!week.options.length) {
     for (let w = 1; w <= 25; w++) {
@@ -241,7 +284,6 @@ function initRoomSelectors() {
       o.textContent = `第 ${w} 周`;
       week.appendChild(o);
     }
-    week.value = "3"; // 当前周附近，用户可改
   }
   for (const sel of [$("sel-room-jc-start"), $("sel-room-jc-end")]) {
     if (sel.options.length) continue;
@@ -271,7 +313,7 @@ function weekDateRange(cal, w) {
   return { qssj: fmt(monday), jssj: fmt(sunday) };
 }
 
-/** 节次起止时段（timetable[0..n] 的 start/end，补秒） */
+/** 节次起止时段（timetable 的 start/end，补秒） */
 function periodTimeRange(periods, jcStart, jcEnd) {
   const first = periods[Math.min(jcStart, periods.length) - 1];
   const last = periods[Math.min(jcEnd, periods.length) - 1];
@@ -291,12 +333,11 @@ async function loadRooms() {
   await withBusy("查询空闲教室", async () => {
     clearPanelError("tab-rooms");
 
-    // 校历：学期起始日 → 周次换算日期（校历组件只提供当前学期；
-    // 选择历史学期时按其学期名近似换算，起始日沿用当前校历）
+    // 校历：学期起始日 → 周次换算日期（校历组件只提供当前学期）
     const cal = await invoke("academic_calendar");
     const range = weekDateRange(cal, week);
 
-    // 节次时间表：节次 → 时段
+    // 节次时间表：节次 → 时段（失败回退默认时段）
     const periods = await invoke("timetable", { year, term }).catch((e) => {
       setStatus("节次时间表获取失败，使用默认时段", true);
       return [];
@@ -305,49 +346,20 @@ async function loadRooms() {
 
     $("room-range").textContent = `第 ${week} 周（${range.qssj} ~ ${range.jssj}）· 第 ${jcStart}-${jcEnd} 节（${times.qssd.slice(0, 5)} ~ ${times.jssd.slice(0, 5)}）`;
 
-    setStatus("查询空闲教室数据…");
+    // 楼栋/类别作为服务端查询参数（返回该筛选下的全部结果）
     const rooms = await invoke("free_rooms", {
       year, term,
       qssj: range.qssj,
       jssj: range.jssj,
       qssd: times.qssd,
       jssd: times.jssd,
+      lh: $("sel-room-building").value,
+      cdlbId: $("sel-room-cat").value,
     });
 
-    lastRooms = rooms;
-    fillRoomCategories(rooms);
-    applyRoomFilters();
+    renderRooms(rooms);
+    setStatus(`空闲教室已更新（${rooms.length} 间）`);
   });
-}
-
-/** 填充类别/楼栋下拉（首次查询后按数据去重生成） */
-function fillRoomCategories(rooms) {
-  const fill = (sel, key) => {
-    if (sel.options.length > 1) return; // 已填充
-    const values = [...new Set(rooms.map((r) => r[key]).filter(Boolean))].sort();
-    for (const v of values) {
-      const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
-      sel.appendChild(opt);
-    }
-  };
-  fill($("sel-room-cat"), "category");
-  fill($("sel-room-building"), "building");
-}
-
-/** 最近一次查询的结果（类别/楼栋筛选在此之上做纯前端过滤） */
-let lastRooms = [];
-
-/** 按类别+楼栋过滤并渲染 */
-function applyRoomFilters() {
-  const cat = $("sel-room-cat").value;
-  const bld = $("sel-room-building").value;
-  const filtered = lastRooms.filter(
-    (r) => (!cat || r.category === cat) && (!bld || r.building === bld)
-  );
-  renderRooms(filtered);
-  setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${lastRooms.length} 间）`);
 }
 
 /** 渲染教室表格 */
@@ -736,9 +748,7 @@ $("btn-load-notices").addEventListener("click", (ev) =>
 $("btn-load-rooms").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadRooms()).catch(() => {}));
 
-// 类别/楼栋切换：纯前端过滤，不打接口
-$("sel-room-cat").addEventListener("change", applyRoomFilters);
-$("sel-room-building").addEventListener("change", applyRoomFilters);
+
 
 $("btn-this-week").addEventListener("click", async () => {
   try {

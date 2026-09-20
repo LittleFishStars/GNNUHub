@@ -550,6 +550,8 @@ impl Session {
         jssj: &str,
         qssd: &str,
         jssd: &str,
+        lh: &str,
+        cdlb_id: &str,
     ) -> Result<Vec<FreeRoom>> {
         let cache_key = format!("{term:?}/{qssj}/{jssj}/{qssd}/{jssd}");
         {
@@ -573,8 +575,8 @@ impl Session {
             ("yuyjsctbj", "1"),
             ("dm", ""),
             ("xqh_id", ""),
-            ("lh", ""),
-            ("cdlb_id", ""),
+            ("lh", lh),
+            ("cdlb_id", cdlb_id),
             ("cdejlb_id", ""),
             // 借阅方式（1=按日借用）——必需参数，缺失会触发
             // 「系统运行异常」错误页（7 形状对照实验定性）
