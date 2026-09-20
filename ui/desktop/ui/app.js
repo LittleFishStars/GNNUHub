@@ -341,28 +341,34 @@ async function loadNotices() {
         dateTd.textContent = n.date || "—";
         tr.append(titleTd, catTd, dateTd);
 
-        // 点击行：展开/收起正文
+        // 点击行：展开/收起正文（全程状态跟踪，任何一步失败都可见）
         tr.addEventListener("click", async () => {
-          const existing = tr.nextElementSibling;
-          if (existing && existing.classList.contains("notice-detail-row")) {
-            existing.remove();
-            return;
-          }
-          const detailRow = document.createElement("tr");
-          detailRow.className = "notice-detail-row";
-          const detailTd = document.createElement("td");
-          detailTd.colSpan = 3;
-          detailTd.textContent = "加载中…";
-          tr.after(detailRow);
-
           try {
+            setStatus("已触发通知点击");
+            const existing = tr.nextElementSibling;
+            if (existing && existing.classList.contains("notice-detail-row")) {
+              existing.remove();
+              setStatus("已收起正文");
+              return;
+            }
+            const detailRow = document.createElement("tr");
+            detailRow.className = "notice-detail-row";
+            const detailTd = document.createElement("td");
+            detailTd.colSpan = 3;
+            detailTd.textContent = "加载中…";
+            tr.after(detailRow);
+            setStatus("调用 notice_content…");
+
             const d = await invoke("notice_content", { detailPath: n.detail_path });
+            setStatus(`正文返回 ${d.content.length} 字，渲染中…`);
+
             detailTd.innerHTML =
               `<div class="notice-meta">${d.publisher} · ${d.publish_time} · 浏览 ${d.views}</div>` +
               `<div class="notice-body"></div>`;
             detailTd.querySelector(".notice-body").textContent = d.content;
+            setStatus("正文已加载");
           } catch (e) {
-            detailTd.textContent = "加载失败：" + e;
+            setStatus("点击处理错误：" + (e?.message ?? e), true);
           }
         });
 
