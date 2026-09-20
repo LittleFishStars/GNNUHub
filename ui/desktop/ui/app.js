@@ -356,6 +356,8 @@ async function loadNotices() {
             const detailTd = document.createElement("td");
             detailTd.colSpan = 3;
             detailTd.textContent = "加载中…";
+            // 必须先把 td 挂进 tr 再插入 DOM——孤儿节点的内容永远不会显示
+            detailRow.appendChild(detailTd);
             tr.after(detailRow);
             setStatus("调用 notice_content…");
 
