@@ -191,6 +191,7 @@ impl HubService {
     ///
     /// `qssj`/`jssj` 为日期（`YYYY-MM-DD`），`qssd`/`jssd` 为时段
     /// （`HH:mm:00`）；时间字段缺失会触发服务端异常。
+    #[allow(clippy::too_many_arguments)] // 查询条件与教务页面表单一一对应
     pub async fn free_rooms(
         &self,
         term: AcademicTerm,
