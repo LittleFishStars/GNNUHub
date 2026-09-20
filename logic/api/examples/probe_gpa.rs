@@ -106,6 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "2026-09-25",
             "08:00:00",
             "22:00:00",
+            "", // 楼栋：全部
+            "", // 类别：全部
         )
         .await
     {
