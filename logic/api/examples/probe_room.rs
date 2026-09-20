@@ -120,6 +120,181 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     ];
 
+    // V 系列：UI 教室 tab 的实际参数（第 3 周周一~周日 + 节次 1-11 换算时段）
+    let ui_variants: Vec<(&str, Vec<(&str, &str)>)> = vec![
+        (
+            "V1 UI 参数（第3周 09-14~09-20 + 1-11节）",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("qssj", "2026-09-14"),
+                ("jssj", "2026-09-20"),
+                ("qssd", "08:20:00"),
+                ("jssd", "21:25:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "100"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+        (
+            "V3 未来日期 09-21~09-27 + UI 时段 08:20/21:25",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("qssj", "2026-09-21"),
+                ("jssj", "2026-09-27"),
+                ("qssd", "08:20:00"),
+                ("jssd", "21:25:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "100"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+        (
+            "V4 过去日期 09-14~09-20 + S1 时段 08:00/22:00（隔离时段与日期）",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("qssj", "2026-09-14"),
+                ("jssj", "2026-09-20"),
+                ("qssd", "08:00:00"),
+                ("jssd", "22:00:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "100"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+        (
+            "V5 未来日期+UI时段+jyfs=1（隔离 jyfs）",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("jyfs", "1"),
+                ("qssj", "2026-09-21"),
+                ("jssj", "2026-09-27"),
+                ("qssd", "08:20:00"),
+                ("jssd", "21:25:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "100"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+        (
+            "V6 过去日期+S1时段+jyfs=1（隔离日期）",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("jyfs", "1"),
+                ("qssj", "2026-09-14"),
+                ("jssj", "2026-09-20"),
+                ("qssd", "08:00:00"),
+                ("jssd", "22:00:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "100"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+        (
+            "V2 同 V1 但 showCount=20（probe 成功时的分页）",
+            [
+                ("xnm", "2026"),
+                ("xqm", "3"),
+                ("cdyysqkz", "0"),
+                ("glrycdyysfxysp", "1"),
+                ("xqFlag", "0"),
+                ("syr", student_id_str.as_str()),
+                ("syrxm", ""),
+                ("yuyjsctbj", "1"),
+                ("dm", ""),
+                ("xqh_id", ""),
+                ("lh", ""),
+                ("cdlb_id", ""),
+                ("cdejlb_id", ""),
+                ("qssj", "2026-09-14"),
+                ("jssj", "2026-09-20"),
+                ("qssd", "08:20:00"),
+                ("jssd", "21:25:00"),
+                ("zd_fzdm", "N211205-kxcdlb"),
+                ("queryModel.showCount", "20"),
+                ("queryModel.currentPage", "1"),
+            ]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect(),
+        ),
+    ];
+    variants.extend(ui_variants);
+
     // S 系列：补时间段（WdatePicker 格式——qssj/jssj 日期，qssd/jssd HH:mm:00）
     let time_fields: &[(&str, &str)] = &[
         ("qssj", "2026-09-21"),

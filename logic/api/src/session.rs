@@ -576,6 +576,9 @@ impl Session {
             ("lh", ""),
             ("cdlb_id", ""),
             ("cdejlb_id", ""),
+            // 借阅方式（1=按日借用）——必需参数，缺失会触发
+            // 「系统运行异常」错误页（7 形状对照实验定性）
+            ("jyfs", "1"),
             ("qssj", qssj),
             ("jssj", jssj),
             ("qssd", qssd),
