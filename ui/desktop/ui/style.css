@@ -343,3 +343,10 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   line-height: 1.7;
   font-size: 13px;
 }
+
+.room-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}

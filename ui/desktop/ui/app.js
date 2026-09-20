@@ -229,6 +229,86 @@ async function loadExams() {
   });
 }
 
+/* ---------- 空闲教室 ---------- */
+
+function renderRooms(rooms) {
+  const wrap = $("room-list");
+  wrap.innerHTML = "";
+  if (!rooms.length) {
+    wrap.innerHTML = '<div class="empty-tip">该时段暂无空闲教室</div>';
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "exam-table";
+  table.innerHTML =
+    "<thead><tr><th>场地</th><th>类别</th><th>归属</th><th>教学楼</th><th>座位</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const r of rooms) {
+    const tr = document.createElement("tr");
+    const cells = [
+      [r.name, r.code],
+      [r.category],
+      [r.campus],
+      [r.building],
+      [r.seats ? String(r.seats) : "—"],
+    ];
+    for (const [main, sub] of cells) {
+      const td = document.createElement("td");
+      td.textContent = main || "—";
+      if (sub) {
+        const small = document.createElement("div");
+        small.className = "sub";
+        small.textContent = sub;
+        td.appendChild(small);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+}
+
+/** 填充类别下拉（首次查询后按数据去重生成） */
+function fillRoomCategories(rooms) {
+  const sel = $("sel-room-cat");
+  if (sel.options.length > 1) return; // 已填充
+  const cats = [...new Set(rooms.map((r) => r.category).filter(Boolean))].sort();
+  for (const c of cats) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  }
+}
+
+async function loadRooms() {
+  const date = $("room-date").value;
+  const qssd = $("room-qssd").value;
+  const jssd = $("room-jssd").value;
+  if (!date) {
+    setStatus("请先选择日期", true);
+    return;
+  }
+
+  await withBusy("查询空闲教室", async () => {
+    clearPanelError("tab-rooms");
+    const rooms = await invoke("free_rooms", {
+      year: Number($("sel-year").value),
+      term: Number($("sel-term").value),
+      qssj: date,
+      jssj: date,
+      qssd: qssd + ":00",
+      jssd: jssd + ":00",
+    });
+    fillRoomCategories(rooms);
+    const cat = $("sel-room-cat").value;
+    const filtered = cat ? rooms.filter((r) => r.category === cat) : rooms;
+    renderRooms(filtered);
+    setStatus(`空闲教室已更新（${filtered.length} 间 / 共 ${rooms.length} 间）`);
+  });
+}
+
 /* ---------- 学业情况（GPA） ---------- */
 
 async function loadAcademic() {
@@ -573,6 +653,17 @@ $("btn-load-retakes").addEventListener("click", (ev) =>
 $("btn-load-notices").addEventListener("click", (ev) =>
     withButton(ev.currentTarget, () => loadNotices()).catch(() => {}));
 
+$("btn-load-rooms").addEventListener("click", (ev) =>
+    withButton(ev.currentTarget, () => loadRooms()).catch(() => {}));
+
+$("sel-room-cat").addEventListener("change", () => {
+  // 类别切换：前端过滤已渲染数据，不打接口
+  const table = $("room-list").querySelector("tbody");
+  if (!table) return;
+  // 简单方案：重新触发一次渲染由 loadRooms 处理，这里直接重查
+  loadRooms().catch(() => {});
+});
+
 $("btn-this-week").addEventListener("click", async () => {
   try {
     const week = await invoke("this_week");
@@ -611,6 +702,10 @@ document.querySelectorAll(".tab").forEach((btn) => {
     }
     if (btn.dataset.tab === "academic" && !$("academic-table").childElementCount) {
       loadAcademic().catch(() => {});
+    }
+    if (btn.dataset.tab === "rooms" && !$("room-list").childElementCount) {
+      $("room-date").value = new Date().toISOString().slice(0, 10);
+      loadRooms().catch(() => {});
     }
   });
 });

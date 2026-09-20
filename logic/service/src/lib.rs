@@ -187,6 +187,25 @@ impl HubService {
         Ok(self.active_session().await?.this_week().await?)
     }
 
+    /// 拉取空闲教室（可借用场地）列表
+    ///
+    /// `qssj`/`jssj` 为日期（`YYYY-MM-DD`），`qssd`/`jssd` 为时段
+    /// （`HH:mm:00`）；时间字段缺失会触发服务端异常。
+    pub async fn free_rooms(
+        &self,
+        term: AcademicTerm,
+        qssj: &str,
+        jssj: &str,
+        qssd: &str,
+        jssd: &str,
+    ) -> std::result::Result<Vec<model::FreeRoom>, ServiceError> {
+        Ok(self
+            .active_session()
+            .await?
+            .free_rooms(term, qssj, jssj, qssd, jssd)
+            .await?)
+    }
+
     /// 拉取通知详情正文
     pub async fn notice_content(
         &self,

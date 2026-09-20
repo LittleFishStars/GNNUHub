@@ -15,8 +15,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use gnnuhub_core::model::{
-    AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, GpaSummary, Notice, NoticeDetail,
-    PeriodTime, RetakeCourse, StudentInfo,
+    AcademicCalendar, AcademicTerm, ClassSchedule, ExamRecord, FreeRoom, GpaSummary, Notice,
+    NoticeDetail, PeriodTime, RetakeCourse, StudentInfo,
 };
 use gnnuhub_core::{Error, JWGL_BASE_URL, Result};
 
@@ -38,6 +38,8 @@ struct SessionState {
     gpa: Option<Vec<GpaSummary>>,
     /// 校历缓存
     calendar: Option<AcademicCalendar>,
+    /// 空闲教室缓存（键 = 学期+时间段）
+    free_rooms: HashMap<String, Vec<FreeRoom>>,
     /// 节次时间表
     timetable: Option<Vec<PeriodTime>>,
     /// 当前教学周
@@ -532,6 +534,69 @@ impl Session {
         let mut state = self.state.lock().await;
         state.gpa = Some(summary.clone());
         Ok(summary)
+    }
+
+    /// 拉取空闲教室（可借用场地）列表
+    ///
+    /// 对应「查询空闲教室」（`cdjy_cxKxcdlb.html?doType=query`，
+    /// N2155）。查询与当前学生会话绑定（表单预填 `syr`=使用人）。
+    /// `qssj`/`jssj` 为日期（`YYYY-MM-DD`），`qssd`/`jssd` 为时段
+    /// （`HH:mm:00`）——**时间字段缺失会触发服务端异常页**（实测）。
+    /// 服务端不按学年学期过滤，`term` 仅作缓存分桶的键。
+    pub async fn free_rooms(
+        &self,
+        term: AcademicTerm,
+        qssj: &str,
+        jssj: &str,
+        qssd: &str,
+        jssd: &str,
+    ) -> Result<Vec<FreeRoom>> {
+        let cache_key = format!("{term:?}/{qssj}/{jssj}/{qssd}/{jssd}");
+        {
+            let state = self.state.lock().await;
+            if let Some(cached) = state.free_rooms.get(&cache_key) {
+                return Ok(cached.clone());
+            }
+        }
+
+        let year_str = term.as_xnm();
+        let xqm_str = term.as_xqm().to_string();
+        let student = self.student_id.clone();
+        let form: Vec<(&str, &str)> = vec![
+            ("xnm", year_str.as_str()),
+            ("xqm", xqm_str.as_str()),
+            ("cdyysqkz", "0"),
+            ("glrycdyysfxysp", "1"),
+            ("xqFlag", "0"),
+            ("syr", student.as_str()),
+            ("syrxm", ""),
+            ("yuyjsctbj", "1"),
+            ("dm", ""),
+            ("xqh_id", ""),
+            ("lh", ""),
+            ("cdlb_id", ""),
+            ("cdejlb_id", ""),
+            ("qssj", qssj),
+            ("jssj", jssj),
+            ("qssd", qssd),
+            ("jssd", jssd),
+            ("zd_fzdm", "N211205-kxcdlb"),
+            ("queryModel.showCount", "100"),
+            ("queryModel.currentPage", "1"),
+        ];
+
+        let body = self
+            .post_form(
+                "/cdjy/cdjy_cxKxcdlb.html",
+                &[("gnmkdm", "N2155"), ("doType", "query")],
+                &form,
+            )
+            .await?;
+
+        let rooms = parse::parse_free_rooms(&body)?;
+        let mut state = self.state.lock().await;
+        state.free_rooms.insert(cache_key, rooms.clone());
+        Ok(rooms)
     }
 
     /// 拉取首页通知公告列表

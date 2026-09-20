@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use gnnuhub_core::model::{
     AcademicCalendar, AcademicTerm, ClassSchedule, ClassTime, CourseEntry, Document, ExamRecord,
-    GpaSummary, GradeRecord, Notice, NoticeDetail, PeriodRange, PeriodTime, RetakeCourse,
+    FreeRoom, GpaSummary, GradeRecord, Notice, NoticeDetail, PeriodRange, PeriodTime, RetakeCourse,
     StudentInfo, parse_credit,
 };
 use gnnuhub_core::{Error, Result};
@@ -917,6 +917,61 @@ pub fn parse_notice_detail(html: &str) -> Result<NoticeDetail> {
     })
 }
 
+/// 空闲教室查询接口的信封（数据在 `items`）
+#[derive(Debug, Default, Deserialize)]
+struct RawFreeRoomResponse {
+    #[serde(default)]
+    items: Vec<RawFreeRoom>,
+}
+
+/// 空闲教室查询的一条记录
+#[derive(Debug, Default, Deserialize)]
+struct RawFreeRoom {
+    /// 场地名称
+    #[serde(default, rename = "cdmc")]
+    name: String,
+    /// 场地编号
+    #[serde(default, rename = "cdbh")]
+    code: String,
+    /// 类别
+    #[serde(default, rename = "cdlbmc")]
+    category: String,
+    /// 归属（学院/校区原文）
+    #[serde(default, rename = "xqmc")]
+    campus: String,
+    /// 教学楼名
+    #[serde(default, rename = "jxlmc")]
+    building: String,
+    /// 座位数
+    #[serde(default, rename = "zws")]
+    seats: String,
+}
+
+impl From<RawFreeRoom> for FreeRoom {
+    fn from(raw: RawFreeRoom) -> Self {
+        Self {
+            name: raw.name,
+            code: raw.code,
+            category: raw.category,
+            campus: raw.campus,
+            building: raw.building,
+            seats: raw.seats.trim().parse().unwrap_or(0),
+        }
+    }
+}
+
+/// 解析空闲教室查询接口响应
+///
+/// 形状（实测 1208 条全库）：POST
+/// `/cdjy/cdjy_cxKxcdlb.html?gnmkdm=N2155&doType=query`，body 带
+/// `xnm`/`xqm`/`syr`（当前学号）/**时间段**（`qssj`/`jssj` 日期、
+/// `qssd`/`jssd` `HH:mm:00` 时段——缺时间字段会触发服务端异常页）
+/// 与 `zd_fzdm=N211205-kxcdlb`。
+pub fn parse_free_rooms(body: &str) -> Result<Vec<FreeRoom>> {
+    let raw: RawFreeRoomResponse = serde_json::from_str(body).map_err(Error::Json)?;
+    Ok(raw.items.into_iter().map(FreeRoom::from).collect())
+}
+
 /// 从首页校历组件（`index_cxAreaFive.html`）解析学年学期信息
 ///
 /// 页面为服务端渲染文本，学期信息形如
@@ -1542,6 +1597,23 @@ mod tests {
         assert!(!second.pinned);
         assert_eq!(second.title, "关于转专业计划的通...");
         assert_eq!(second.date, "2026-09-01");
+    }
+
+    /// 空闲教室解析（脱敏夹具，键集对齐实测响应）
+    #[test]
+    fn parses_free_rooms() {
+        let body = r#"{"currentPage":1,"items":[
+            {"cdmc":"DNYJ-101","cdbh":"DNYJ101","cdlbmc":"实验室",
+             "xqmc":"应急安全学院","jxlmc":"某实验楼","zws":"30","sfkjy":"1"},
+            {"cdmc":"运-3WL","zws":"abc"}
+        ]}"#;
+        let rooms = parse_free_rooms(body).unwrap();
+        assert_eq!(rooms.len(), 2);
+        assert_eq!(rooms[0].name, "DNYJ-101");
+        assert_eq!(rooms[0].category, "实验室");
+        assert_eq!(rooms[0].seats, 30);
+        // 非法座位数退化 0
+        assert_eq!(rooms[1].seats, 0);
     }
 
     /// 通知正文解析（脱敏夹具，DOM 对齐实测响应）

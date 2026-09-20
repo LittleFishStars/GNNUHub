@@ -639,6 +639,27 @@ pub struct Notice {
     pub category: String,
 }
 
+/// 一条空闲教室（场地）记录
+///
+/// 来自「查询空闲教室」（`cdjy_cxKxcdlb.html?doType=query`，
+/// N2155）——学生可借用的空闲场地（含各学院实验室/教室/运动场等）。
+/// 实测全库 1208 条，`sfkjy` 标记是否可借用。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FreeRoom {
+    /// 场地名称（例如 `"DNYJ-101"`）
+    pub name: String,
+    /// 场地编号（例如 `"DNYJ101"`）
+    pub code: String,
+    /// 类别（实验室 / 多媒体教室 / 运动场 等）
+    pub category: String,
+    /// 归属（学院或校区，接口原文）
+    pub campus: String,
+    /// 所在教学楼（接口原文，可能为编号）
+    pub building: String,
+    /// 座位数
+    pub seats: u32,
+}
+
 /// 通知详情
 ///
 /// 来自通知正文页（`xwck_ckXw.html?xwbh=...`）。`content` 为

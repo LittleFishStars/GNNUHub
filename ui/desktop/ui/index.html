@@ -40,6 +40,7 @@
         <button data-tab="retakes" class="tab">重修</button>
         <button data-tab="notices" class="tab">通知</button>
         <button data-tab="academic" class="tab">学业</button>
+        <button data-tab="rooms" class="tab">教室</button>
         <button data-tab="profile" class="tab">学籍</button>
         <button data-tab="grades" class="tab" disabled
                 title="成绩接口尚未实测可用">成绩</button>
@@ -95,6 +96,22 @@
         <button id="btn-load-exams" class="primary small">查询</button>
       </div>
       <div id="exam-list"></div>
+    </div>
+
+    <!-- 空闲教室 -->
+    <div id="tab-rooms" class="tab-panel hidden">
+      <div class="controls">
+        <label>日期 <input id="room-date" type="date" class="room-input"></label>
+        <label>时段 <input id="room-qssd" type="time" class="room-input" value="08:00"> —
+                       <input id="room-jssd" type="time" class="room-input" value="22:00"></label>
+        <label>类别
+          <select id="sel-room-cat">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <button id="btn-load-rooms" class="primary small">查询</button>
+      </div>
+      <div id="room-list"></div>
     </div>
 
     <!-- 学业情况 -->
