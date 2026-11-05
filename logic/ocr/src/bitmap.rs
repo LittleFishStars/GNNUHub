@@ -47,7 +47,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use base64::Engine as _;
 use gnnuhub_core::{Error, Result};
 use image::DynamicImage;
 
@@ -496,18 +495,10 @@ pub fn embedded_library() -> Result<BitmapLibrary> {
     BitmapLibrary::from_json(EMBEDDED_LIBRARY_JSON)
 }
 
-/// 便捷函数：把 base64 图片的字节解码出来（供测试使用）
-#[allow(dead_code)]
-fn decode_b64_for_test(s: &str) -> Result<Vec<u8>> {
-    let raw = crate::strip_data_url_prefix(s);
-    base64::engine::general_purpose::STANDARD
-        .decode(raw)
-        .map_err(|e| Error::Image(format!("base64 解码失败: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
 
     fn tiny_lib() -> BitmapLibrary {
         // 构造一个 2x2 的 "L" 形状字库

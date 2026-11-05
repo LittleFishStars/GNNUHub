@@ -8,8 +8,15 @@
 //! - 所有接口都是 `async` 的
 //! - 课表等信息在首次请求后缓存于内存，避免重复打接口
 //! - 缓存用 `tokio::sync::Mutex` 保护，`Session` 可安全跨任务共享
+//!
+//! # 缓存模式
+//!
+//! 各查询接口统一走 [`Session::cached`]：先读缓存，未命中才发起
+//! 请求并写回。新增带缓存的接口时也应复用它，而不是手写
+//! 「锁 → 查 → 放锁 → 请求 → 再锁 → 写」的样板。
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -130,11 +137,40 @@ impl Session {
     ///
     /// 已经是 `http(s)://` 开头时原样返回，便于直接抓取外部资源。
     fn absolute_url(path: &str) -> String {
-        if path.starts_with("http") {
+        if path.starts_with("http://") || path.starts_with("https://") {
             path.to_string()
         } else {
             format!("{JWGL_BASE_URL}{path}")
         }
+    }
+
+    /// 通用的「读缓存 → 未命中则请求 → 写回」流程
+    ///
+    /// - `read`：从缓存状态中取出命中值（自行 `clone`）
+    /// - `fetch`：未命中时执行的请求（返回值就是要缓存的数据）
+    /// - `write`：把取回的数据写进缓存
+    ///
+    /// 两段锁各自在请求前后短暂持有，**不跨任何 `.await`**，
+    /// 与各方法手写版的行为一致。`class_schedule` / `student_info`
+    /// 因缓存与返回值不是同一份数据（还要合并学生信息），不走本方法。
+    async fn cached<T, R, F, W>(&self, read: R, fetch: F, write: W) -> Result<T>
+    where
+        R: FnOnce(&SessionState) -> Option<T>,
+        F: Future<Output = Result<T>>,
+        W: FnOnce(&mut SessionState, &T),
+    {
+        {
+            let state = self.state.lock().await;
+            if let Some(hit) = read(&state) {
+                return Ok(hit);
+            }
+        }
+
+        let value = fetch.await?;
+
+        let mut state = self.state.lock().await;
+        write(&mut state, &value);
+        Ok(value)
     }
 
     /// 按原样请求一个站内路径，返回响应体文本
@@ -295,12 +331,13 @@ impl Session {
     /// # 单周课表的实现说明
     ///
     /// 历史版本曾走「学生课表查询（按周次）」的移动端接口
-    /// （`xskbcxMobile_cxXsKb.html`），但 2026-09 实测该接口对合法
-    /// 请求也返回字面量 `null`——浏览器请求复刻（带 Referer 与 AJAX
-    /// 头）与程序化复刻（带模块码）在已访问 Zccx 页的同会话内均为
-    /// null，疑似服务端问题。因此改为**整学期课表 + 客户端周次过滤**
-    /// （[`ClassSchedule::week_view`]）：0 次额外请求、结果走同一份
-    /// 缓存，且不再依赖任何行为不明的远程接口。
+    /// （`xskbcxMobile_cxXsKb.html`），2026-09 曾实测该接口返回
+    /// 字面量 `null` 并据此刻意改用客户端过滤——后来定性那次
+    /// `null` 与接口本身无关，是 `Session::send` 写死 GET 方法所致
+    /// （课表接口只认 POST；修复后移动端接口已重验可用）。客户端
+    /// 过滤方案继续保留：整学期课表 + [`ClassSchedule::week_view`]
+    /// 0 次额外请求、结果走同一份缓存；需要按周远程查询时可用
+    /// 移动端接口兜底。
     pub async fn class_schedule(
         &self,
         term: AcademicTerm,
@@ -342,7 +379,7 @@ impl Session {
             .await?;
 
         let (mut schedule, info) = parse::parse_class_schedule(&body)?;
-        parse::attach_academic_term(&mut schedule, term);
+        schedule.academic_term = Some(term);
 
         let mut state = self.state.lock().await;
         state.schedules.insert(term, schedule.clone());
@@ -364,27 +401,24 @@ impl Session {
     ///
     /// 对应 Python 版 `get_timetable`。
     pub async fn timetable(&self, term: AcademicTerm) -> Result<Vec<PeriodTime>> {
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = &state.timetable {
-                return Ok(cached.clone());
-            }
-        }
-
         let year_str = term.as_xnm();
         let xqm_str = term.as_xqm().to_string();
-        let body = self
-            .post_form(
-                "/kbcx/xskbcx_cxRjc.html",
-                &[("gnmkdm", "N2151")],
-                &[("xnm", &year_str), ("xqm", &xqm_str), ("xqh_id", "1")],
-            )
-            .await?;
 
-        let times = parse::parse_timetable(&body)?;
-        let mut state = self.state.lock().await;
-        state.timetable = Some(times.clone());
-        Ok(times)
+        self.cached(
+            |state| state.timetable.clone(),
+            async {
+                let body = self
+                    .post_form(
+                        "/kbcx/xskbcx_cxRjc.html",
+                        &[("gnmkdm", "N2151")],
+                        &[("xnm", &year_str), ("xqm", &xqm_str), ("xqh_id", "1")],
+                    )
+                    .await?;
+                parse::parse_timetable(&body)
+            },
+            |state, times| state.timetable = Some(times.clone()),
+        )
+        .await
     }
 
     /// 拉取考试安排
@@ -403,13 +437,6 @@ impl Session {
     ///   记录（未安排考试的学期自然为空）。学期参数仍按浏览器形状
     ///   照发，缓存按学期分桶以保持接口语义。
     pub async fn exam_schedule(&self, term: AcademicTerm) -> Result<Vec<ExamRecord>> {
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = state.exams.get(&term) {
-                return Ok(cached.clone());
-            }
-        }
-
         let year_str = term.as_xnm();
         let xqm_str = term.as_xqm().to_string();
         let form = [
@@ -424,18 +451,23 @@ impl Session {
             ("queryModel.showCount", "100"),
         ];
 
-        let body = self
-            .post_form(
-                "/kwgl/kscx_cxXsksxxIndex.html",
-                &[("gnmkdm", "N358105"), ("doType", "query")],
-                &form,
-            )
-            .await?;
-
-        let exams = parse::parse_exams(&body)?;
-        let mut state = self.state.lock().await;
-        state.exams.insert(term, exams.clone());
-        Ok(exams)
+        self.cached(
+            |state| state.exams.get(&term).cloned(),
+            async {
+                let body = self
+                    .post_form(
+                        "/kwgl/kscx_cxXsksxxIndex.html",
+                        &[("gnmkdm", "N358105"), ("doType", "query")],
+                        &form,
+                    )
+                    .await?;
+                parse::parse_exams(&body)
+            },
+            |state, exams| {
+                state.exams.insert(term, exams.clone());
+            },
+        )
+        .await
     }
 
     /// 拉取重修课程库
@@ -445,13 +477,6 @@ impl Session {
     /// **不按 `cxxnm`/`cxxqm` 过滤**，返回全部重修课程记录；
     /// 学期参数仅作为缓存分桶的键。
     pub async fn retake_courses(&self, term: AcademicTerm) -> Result<Vec<RetakeCourse>> {
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = state.retakes.get(&term) {
-                return Ok(cached.clone());
-            }
-        }
-
         let year_str = term.as_xnm();
         let xqm_str = term.as_xqm().to_string();
         let form = [
@@ -464,18 +489,23 @@ impl Session {
             ("kch", ""),
         ];
 
-        let body = self
-            .post_form(
-                "/cxkccx/cxkccx_cxCxkccxIndex.html",
-                &[("gnmkdm", "N255720"), ("doType", "query")],
-                &form,
-            )
-            .await?;
-
-        let courses = parse::parse_retake_courses(&body)?;
-        let mut state = self.state.lock().await;
-        state.retakes.insert(term, courses.clone());
-        Ok(courses)
+        self.cached(
+            |state| state.retakes.get(&term).cloned(),
+            async {
+                let body = self
+                    .post_form(
+                        "/cxkccx/cxkccx_cxCxkccxIndex.html",
+                        &[("gnmkdm", "N255720"), ("doType", "query")],
+                        &form,
+                    )
+                    .await?;
+                parse::parse_retake_courses(&body)
+            },
+            |state, courses| {
+                state.retakes.insert(term, courses.clone());
+            },
+        )
+        .await
     }
 
     /// 拉取通知详情正文
@@ -492,21 +522,17 @@ impl Session {
     /// 来自首页校历组件（`index_cxAreaFive.html`）。学期未开始时
     /// 也能取得校历（本方法只解析学期信息，不涉及当前周）。
     pub async fn academic_calendar(&self) -> Result<AcademicCalendar> {
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = &state.calendar {
-                return Ok(cached.clone());
-            }
-        }
-
-        let body = self
-            .get("/xtgl/index_cxAreaFive.html", &[("localeKey", "zh_CN")])
-            .await?;
-
-        let cal = parse::parse_calendar(&body)?;
-        let mut state = self.state.lock().await;
-        state.calendar = Some(cal.clone());
-        Ok(cal)
+        self.cached(
+            |state| state.calendar.clone(),
+            async {
+                let body = self
+                    .get("/xtgl/index_cxAreaFive.html", &[("localeKey", "zh_CN")])
+                    .await?;
+                parse::parse_calendar(&body)
+            },
+            |state, cal| state.calendar = Some(cal.clone()),
+        )
+        .await
     }
 
     /// 拉取学业情况（按课程性质分组的 GPA 与获得学分）
@@ -515,25 +541,21 @@ impl Session {
     /// N105515）。实测服务端不提供全量 GPA，需按分组学分加权计算
     /// （见 [`GpaSummary::overall_gpa`]）。
     pub async fn gpa_summary(&self) -> Result<Vec<GpaSummary>> {
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = &state.gpa {
-                return Ok(cached.clone());
-            }
-        }
-
-        let body = self
-            .post_form(
-                "/xsxy/xsxyqk_cxKczxAllIndex.html",
-                &[("gnmkdm", "N105515"), ("doType", "query")],
-                &[("xh_id", "")],
-            )
-            .await?;
-
-        let summary = parse::parse_gpa_summary(&body)?;
-        let mut state = self.state.lock().await;
-        state.gpa = Some(summary.clone());
-        Ok(summary)
+        self.cached(
+            |state| state.gpa.clone(),
+            async {
+                let body = self
+                    .post_form(
+                        "/xsxy/xsxyqk_cxKczxAllIndex.html",
+                        &[("gnmkdm", "N105515"), ("doType", "query")],
+                        &[("xh_id", "")],
+                    )
+                    .await?;
+                parse::parse_gpa_summary(&body)
+            },
+            |state, summary| state.gpa = Some(summary.clone()),
+        )
+        .await
     }
 
     /// 拉取空闲教室（可借用场地）列表
@@ -555,12 +577,6 @@ impl Session {
         cdlb_id: &str,
     ) -> Result<Vec<FreeRoom>> {
         let cache_key = format!("{term:?}/{qssj}/{jssj}/{qssd}/{jssd}");
-        {
-            let state = self.state.lock().await;
-            if let Some(cached) = state.free_rooms.get(&cache_key) {
-                return Ok(cached.clone());
-            }
-        }
 
         let year_str = term.as_xnm();
         let xqm_str = term.as_xqm().to_string();
@@ -591,18 +607,23 @@ impl Session {
             ("queryModel.currentPage", "1"),
         ];
 
-        let body = self
-            .post_form(
-                "/cdjy/cdjy_cxKxcdlb.html",
-                &[("gnmkdm", "N2155"), ("doType", "query")],
-                &form,
-            )
-            .await?;
-
-        let rooms = parse::parse_free_rooms(&body)?;
-        let mut state = self.state.lock().await;
-        state.free_rooms.insert(cache_key, rooms.clone());
-        Ok(rooms)
+        self.cached(
+            |state| state.free_rooms.get(&cache_key).cloned(),
+            async {
+                let body = self
+                    .post_form(
+                        "/cdjy/cdjy_cxKxcdlb.html",
+                        &[("gnmkdm", "N2155"), ("doType", "query")],
+                        &form,
+                    )
+                    .await?;
+                parse::parse_free_rooms(&body)
+            },
+            |state, rooms| {
+                state.free_rooms.insert(cache_key.clone(), rooms.clone());
+            },
+        )
+        .await
     }
 
     /// 拉取首页通知公告列表
@@ -632,29 +653,26 @@ impl Session {
     /// 对应 Python 版 `this_week`。
     ///
     /// 注意：本方法是**唯一保留 HTML 解析**的路径。当前周次没有
-    /// 已知的 JSON 接口可用——按周次查询课表的移动端接口已实测失效
-    /// （见 [`Session::class_schedule`]），而整学期课表响应里不携带
-    /// 「今天是第几周」的信息，只能从 Zccx 页面 `#zs` 下拉框的选中
+    /// 已知的 JSON 接口可用——整学期课表响应里不携带「今天是第
+    /// 几周」的信息（按周查询的移动端课表接口要传入周次而非返回
+    /// 周次，无法充当来源），只能从 Zccx 页面 `#zs` 下拉框的选中
     /// 项读取。结果会缓存，整个会话只解析一次。
+    /// 另有基于校历的纯本地推算可用：[`AcademicCalendar::current_week`]。
     pub async fn this_week(&self) -> Result<u8> {
-        {
-            let state = self.state.lock().await;
-            if let Some(week) = state.this_week {
-                return Ok(week);
-            }
-        }
-
-        let html = self
-            .get(
-                "/kbcx/xskbcxZccx_cxXskbcxIndex.html",
-                &[("gnmkdm", "N2154"), ("layout", "default")],
-            )
-            .await?;
-
-        let week = parse::parse_this_week(&html)?;
-        let mut state = self.state.lock().await;
-        state.this_week = Some(week);
-        Ok(week)
+        self.cached(
+            |state| state.this_week,
+            async {
+                let html = self
+                    .get(
+                        "/kbcx/xskbcxZccx_cxXskbcxIndex.html",
+                        &[("gnmkdm", "N2154"), ("layout", "default")],
+                    )
+                    .await?;
+                parse::parse_this_week(&html)
+            },
+            |state, week| state.this_week = Some(*week),
+        )
+        .await
     }
 
     /// 当前周课表（便捷方法）

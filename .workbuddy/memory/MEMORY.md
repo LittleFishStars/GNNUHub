@@ -4,325 +4,108 @@
 
 ## 仓库架构（2026-09-18 用户定稿，勿再放回 crates/）
 
-**逻辑与界面两大块，界面按平台细分**：
+- `logic/`（按业务功能分 crate）：`core/`（模型与错误）、`crypto/`、`ocr/`、
+  `api/`（教务客户端）、`service/`（UI 无关应用服务层，`HubService` +
+  `ServiceError`，**各 UI 的唯一入口**）
+- `ui/`（按平台分实现）：`desktop/`（gnnuhub-desktop，Tauri 2），
+  将来 CLI / 移动端等放 `ui/` 下新目录。
+- **分层纪律**：`ui/` 只依赖 `gnnuhub-service`（及其 re-export 的 model），
+  不得直接依赖 `gnnuhub-api`/`gnnuhub-core`。
 
-- `logic/`（按业务功能分 crate）：`core/`（模型与错误）、`crypto/`、
-  `ocr/`、`api/`（教务客户端）、`service/`（UI 无关应用服务层，
-  `HubService` + `ServiceError`，**各 UI 的唯一入口**）
-- `ui/`（按平台分实现）：`desktop/`（gnnuhub-desktop，Tauri 2）。
-  将来 CLI / 移动端 / Web 服务端等放 `ui/` 下新目录。
-- **分层纪律**：`ui/` 实现只允许依赖 `gnnuhub-service`（加其 re-export
-  的 `model`），不得直接依赖 `gnnuhub-api`/`gnnuhub-core`。
-- 新增业务功能 → 在 logic/ 里加方法或 crate；新增平台 → ui/ 里加
-  目录，复用 service。
+## 硬性约束（用户明确要求）
 
-## 硬性约束（来自用户明确要求，务必遵守）
-
-- **控制请求量**：用户曾多次因 IP 被封而强烈不满。每轮对话最多 ~20 次
-  网络请求；一旦发现被拦（连接被关闭、域名整体拒连）立即停止。
-- **优先离线逆向**：用户明确指示「抓包返回的 js 脚本进行逆向分析，而不是
-  一直尝试」。要探接口时先用 `cargo run -p gnnuhub-api --example js_recon`
-  抓一次前端资源，之后全部离线分析，不要再反复打接口试探。
-- **一次只改一个变量**：做实验时不要同时改多个条件。
-- 真实账号测试已获授权（学号 `250710078`）。
+- **控制请求量**（用户因 IP 被封强烈不满过）：每轮对话最多 ~20 次网络请求；
+  发现被拦（连接被关闭、域名拒连）立即停止。
+- **优先离线逆向**：探接口先 `cargo run -p gnnuhub-api --example js_recon`
+  抓一次前端资源，之后离线分析，不反复打接口。
+- **一次只改一个变量**；真实账号测试已授权（学号 `250710078`）。
+- 密码只从环境变量读，**绝不写进代码或提交**。
 
 ## 工具链与代码规范
 
-- **stable 工具链**（见 `rust-toolchain.toml`）。`rustfmt.toml` 里
-  **不能**放 nightly-only 选项（`imports_granularity`、`group_imports`），
-  否则被静默忽略且每次运行都报警告。
-- 提交前跑这三条：
-  ```bash
-  cargo test --workspace --all-targets
-  cargo clippy --workspace --all-targets -- -D warnings   # 必须带 -D warnings
-  cargo fmt --all --check
-  ```
-  注意 clippy **默认跑不够**：`derivable_impls` 等 lint 只在 `-D warnings`
-  下才会暴露。
-- 注释与文档一律中文。
-- 代码风格：`Session` 的所有 HTTP 出口收敛到私有 `send()`，新增请求方法
-  走它而不是各自拼 URL。
+- stable 工具链；`rustfmt.toml` 不能放 nightly-only 选项。
+- 提交前三件套（clippy 必须带 `-D warnings`，否则 lint 不全暴露）：
+  `cargo test --workspace --all-targets` /
+  `cargo clippy --workspace --all-targets -- -D warnings` /
+  `cargo fmt --all --check`
+- 注释与文档一律中文；`Session` 所有 HTTP 出口走私有 `send()`。
+- `/tmp` 是 10M tmpfs，构建前必须 `export TMPDIR=$PWD/.scratch/tmp`；
+  临时脚本放项目内 `.scratch/`（已 gitignore）。
 
-## 已验证的关键事实（逆向 + 实测）
+## 关键事实（逆向 + 实测，均已验证）
 
-- **SSO 交换共 3 跳**，且**必须在 `/xtgl/login_slogin.html` 之前停止**——
-  继续跟随会被服务端直接关闭 TLS 连接（`peer closed connection without
-  sending TLS close_notify`）。这是稳定的行为拦截，重试无效。
-- 后续请求必须同时携带 `JSESSIONID` **与** `SF_cookie_17`（网关下发）；
-  只带前者会 302。`rememberMe=deleteMe` 必须剔除，带上会被断连。
-- 同名 `JSESSIONID` 有作用域：`/sso` 那份只是链路中转物，最终用根作用域那份。
-- `Client::cas_headers()` 带 `Host: cas.gnnu.edu.cn`，**不可跨域复用**，
-  否则 Host 与 SNI 不匹配会被断连。
-- `csrftoken` 对课表/学籍查询接口**不需要**。
-- 验证码：**100×25 RGBA**，固定 4 位，**字母数字 + 大小写混用**，无干扰线。
-  - **开了抗锯齿**：每字符 = 1 个纯色核心 + 约 30 种 AA 混色边缘（实测 130 色）。
-    所以按「严格颜色相等」提取是错的，会把斜线削细；要按**颜色就近 + 保留边缘**。
-  - **有噪点**：随机小点散布在图面，是**独立连通块**，用「保留 ≥8 像素的
-    连通块」可稳定分离出恰好 4 个字符（60/60 张样本验证）。
-  - 4 字符 x 槽位固定 `(0,20) (21,46) (47,73) (74,99)`。
-  - **同一字符有 1~4 种位图**（字号随机），240 个字形里只有 **65 种不同的位图**。
-  - **字符集 = `A-Z` + `a-z` + `0-9`（62 个），逐字符随机大小写**。证据：
-    整图 tesseract 识别 220 字符中大写 38.6% / 小写 42.7% / 数字 18.6%；
-    48/60 张图内混用大小写与数字；同一字号下存在 6~8 种不同字形（含大小写对）。
-    不含标点（早期以为有 `+`，实为 `t` 的误读）。
-  - 服务器**字体不属于本机 929 个可用字族**：用 Java AWT 生成 94 万条字模
-    逐像素比对，含斜线/曲线的字形无一命中（最小差 7~18px），只有纯横竖笔画
-    的字形（`I` `E` `F` `L` `H` `T`）巧合命中。**逐像素模板匹配此路不通。**
-  - **tesseract 5.5.3 可用**（`/usr/bin/tesseract`，有 `eng`）。**整图识别
-    明显优于逐字符**：逐字符 `--psm 10` 因失去上下文更差（65 字形里 21 个
-    在四种缩放下结果漂移）。
-  - **不要用「多配置大投票」**：低质量配置（scale 1）与高质量等权，会把
-    正确答案投掉。`0014.png` 在 `gray5p8`/`gray5p13` 下都坚定给 `LD60`，
-    12 配置投票只给它 2 票。正确做法是**少量高质量配置 + 全票一致判定**。
-  - **~~已实现 `TesseractOcr`~~ 已于 2026-09-18 删除**（原因见下方
-    「只有一条识别路径」）。以下关于 tesseract 的经验**仅供历史参考**，
-    但对「如果将来要再接一个 OCR 引擎」仍有价值：
-  - 当时实现是：灰度化 → LANCZOS ×5 → `--psm 8` 与 `--psm 13` 双配置
-    → 全票一致才输出。60 张样本覆盖 47/60（78.3%）。
-  - **灰度化必须复现 PIL，有两个独立的坑**（各自都能改变识别结果）：
-    1. **系数用 BT.601** `(299,587,114)/1000`，**不是** `image` crate
-       `to_luma8` 的 BT.709 `(2126,7152,722)/10000`。高饱和色上差 10~33 阶。
-    2. **舍入是四舍五入**，必须写 `(... + 500) / 1000`，纯整除会差 4/60。
-    回归测试 `gray_matches_pil_on_real_sample` 用内嵌样本逐像素守着。
-  - **方案对放大倍数敏感（已知弱点）**：`0024.png` 只在 scale **4~8**
-    窗口内读出正确的 `0Cax`，scale 2/3/10 都退化成 `0ax`。滤波器也刚性：
-    NEAREST/BOX/BILINEAR/HAMMING/BICUBIC 全部读出 `0ax`，只有 LANCZOS 正确。
-- **验证码字形渲染是确定性的**：同一 (字符, 字号) 在不同图片、不同颜色下
-  产生**逐像素相同**的二值位图（同一 `4x14` 位图在 7 张图里复现 8 次，
-  来源颜色全不同）。=> **位图查表**是首选方案，上限只取决于库覆盖度，
-  与分类器无关。
-  - 位图库空间 ≈ **67 个**（Chao1: S_obs=65, u1=8, u2=13），60 张样本
-    覆盖度 **96.7%**，仅剩约 2 个未发现。识别率随库大小：
-    10 张→45.2%、30→82.8%、55→96.7%。
-    （注：这是**基于 60 张样本**的历史估计，现已有 100 张、70 条。Chao1 的
-    估计值本身会随样本增加而上升，所以「约 67」是下界性质的参考值，
-    不是收敛值。）
-  - **字符集 = 数字 + 小写 + 大写**（61 个不同字符），**大小写是区分的**。
-    大小写由字形高度承载：cap-height 顶 `y0=5`(h≈13)、x-height 顶
-    `y0=8`(h≈10)、ascender `y0=4`(h≈14)、降部底 `y=22`。
-  - **服务端字体 = DejaVu Sans 常规体，字号约 18，开抗锯齿**
-    （用 42 个字形尺寸向量对 37076 条合成渲染库比对，39/42 命中；
-    Verdana 25/42、Tahoma 20/42 次之）。
-  - **合成渲染库不能当查询表**：合成为关抗锯齿栅格化，真实为抗锯齿后
-    二值化，65 个真实字形对合成库精确命中数为 **0**。合成库仅可用于
-    判定字体身份与几何关系。
-  - `I` 与 `l` 在 DejaVu Sans 下主干**逐像素相同**，位图层不可区分；
-    `i` 的点与主干间有空行、`j` 有降部勾，故 i/j 可判、I/l 需上下文。
-  - **提取器噪声阈值是坑**：`len(blob) >= 8` 的过滤会把 **i/j 的点**
-    （2x2、4 像素、全样本 13 个，且**没有任何真噪点**）当噪点丢掉，
-    导致 i 与 l 位图混淆。必须把小块按 x 重叠 + 位于主干上方合并回主干
-    （`.scratch/extract4.py`）。
-  - tesseract 单字符模式（psm10）**系统性偏向大写**；整图模式（psm8/13）
-    因看得到基线，大小写更可靠。两源冲突时以**整图读数**为准，并用
-    字形高度做独立佐证。
-- **登录接口可验验证码真值**：`parse_ticket_response` 把
-  `data.code == "CODEFALSE"` 映射为 `LoginOutcome::CaptchaIncorrect`，
-  与 `BadCredentials` 干净区分，因此能用真实登录判定识别对错。
-- **CAS 票据接口实测的业务码（全部为真实抓到的原文）**：
-  - `{"data":{"code":"PASSERROR","data":"5,3"}}` → **密码错误**，验证码是对的。
-    `data` 是 `剩余次数,已用次数`。
-  - `{"data":{"code":"USERLOCK"}}` → **账号锁定**，**禁止重试**（重试加重锁定）。
-    映射到独立分支 `LoginOutcome::AccountLocked`。
-  - `{"data":{"code":"CODEFALSE"}}` → 验证码错误。
-  - 注意密码错误走的是 **`data.code`，不是 `meta.statusCode`**；早前文档里
-    写的 `USERNAMEORPASSWORDERROR` 没在这条链路上观察到。
-- **错误密码不是免费的**：同一账号连发 **3 次**错密码即触发 `USERLOCK`。
-  **但正确密码永远不会锁号**：计数器上限是 5 次**失败**，成功登录不进计数。
-  所以量准确率只跑正确密码模式（见下方 ocr_verify 说明）。
-- 认证平台「地址改为服务部署地址」这种提示与实际登录失败无必然关系。
-- `xqm` 取值是 **3（第一学期）/ 12（第二学期）**，不是 1/2。
+- **SSO 交换 3 跳，必须在 `/xtgl/login_slogin.html` 之前停止**，继续跟随会被
+  服务端断 TLS。后续请求须同时带 `JSESSIONID` + `SF_cookie_17`；
+  `rememberMe=deleteMe` 必须剔除。`/sso` 作用域的 JSESSIONID 只是中转，
+  最终用根作用域那份。`cas_headers()` 的 Host 不可跨域复用。
+- `csrftoken` 对课表/学籍查询不需要。`xqm` = 3（第一学期）/ 12（第二学期）。
+- **HTTP 栈**：reqwest + native-tls（系统 OpenSSL）；UA 诚实标识
+  `gnnuhub/<版本>`（实验证明 UA/头组合无关）。不要开 `cookie_store(true)`：
+  会与手动 COOKIE 头叠加出两个 JSESSIONID 导致断连。
+- **🔴 历史教训（2026-09-19）**：`Session::send` 曾写死 `http.get(url)`，
+  所有 POST 实际是 GET+body——课表接口 null 的真因，14 组对照实验被
+  单一混杂变量污染。**对照实验必须先验证已知成功基底仍成功**。
+- **正方权限过滤器**：查询串显式带 `gnmkdm` 即可，无需模拟 Referer。
+- **学籍 JSON 接口（已切换）**：POST `/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801`，
+  最小表单 `{xh_id, fromXh_id:""}`，64 键响应 = HTML 字段 id 去 `col_` 前缀。
+- **移动端课表接口可用**：`xskbcxMobile_cxXsKb` POST（xnm/xqm/zs/doType=app/
+  kblx/xh），客户端过滤方案已上线暂不切换，按周远程查询可兜底。
+- **正方 jqGrid 通用规律**：数据接口常是菜单页 + `?doType=query`；
+  必带 `zd_fzdm=<模块码>-<角色>`（学生 `-xs`）；分页参数被框架重映射
+  `rows→queryModel.showCount`、`page→queryModel.currentPage`，无 `sidx/sord`。
+  菜单 URL ≠ 数据接口，要进对应 JS 确认；学生侧不发 `xh_id`（传了被忽略）。
+- **CAS 业务码**（真实抓包原文）：`PASSERROR`（data 为「剩余次数,已用次数"）
+  → 密码错；`USERLOCK` → 账号锁定**禁止重试**；`CODEFALSE` → 验证码错。
+  走 `data.code` 不是 `meta.statusCode`。**错密码 3 次即锁号，正确密码
+  永不进计数**——量准确率只跑正确密码模式。
+- 成绩查询：该账号恒定返回固定空信封，已停止调参（探针
+  `example probe_grade`，module doc 列了已排除的 7 种假设）。
+  判定「接口是否被调坏」用非法值对照比较信封指纹（已实现
+  `envelope_fingerprint()`）。及格判定只能用 `bfzcj`。
 
-## JSON 数据源迁移（2026-09-18 实测定稿）
+## 验证码识别（2026-09-18 定稿）
 
-- **正方权限过滤器规则**：从「请求查询串或 Referer」读 `gnmkdm`，
-  两者皆无 → 「无功能权限」错误页（2490/2505 字节）。程序化请求
-  在查询串显式带 `gnmkdm` 即可，**无需模拟 Referer**（浏览器 JS 里
-  裸 URL 能工作纯粹因为 Referer 自动携带页面地址里的模块码）。
-- **学籍 JSON 接口（已切换）**：POST
-  `/xsxxxggl/xsxxwh_cxCkDgxsxx.html?gnmkdm=N100801`，最小表单
-  `{xh_id, fromXh_id:""}`——32 位码与 `xnm`/`xqm` 全部可省，
-  无需抓页取码。64 键响应键名 = HTML 字段 id 去 `col_` 前缀；
-  比 HTML 多出辅导员 `fdyjgh`、培养层次 `pyccdm`、学籍状态
-  `xjztdm`、学制 `xz`、生源地 `syd`、入学总分 `rxzf` 等字段；
-  `zyh_id` 是干净专业名免剥后缀。`fetch_student_info` 走它，
-  失败回退 HTML。
-- **🔴✅ 课表接口 null 的真正根因（2026-09-19 定性，此前「WAF
-  TLS 指纹黑名单」等结论全部错误并已更正）**：`Session::send`
-  写死 `http.get(url)`——**所有 POST 表单实际发的是 GET+body**！
-  课表接口只认 POST → null；学籍/考试等接口因 Servlet 容器兼容
-  GET+form-body 一直未暴露。修复 = send() 尊重调用方
-  reqwest::Method（commit e37423e），实测 kbList=18 ✅。
-  **方法论教训**：14 组「形状实验」共享同一条发送路径，被单一
-  混杂变量污染；「借用浏览器 Cookie 被 901 拦截」是指纹突变所致，
-  与课表问题无关。**对照实验必须先验证已知成功基底（Python 版）
-  在当前时点仍成功**。
-  **✅ 已重验（2026-09-19）：移动端课表接口 `xskbcxMobile_cxXsKb`
-  POST（xnm/xqm/zs/doType=app/kblx/xh）返回完整单周课表 JSON
-  （25KB，kbList 结构与主课表一致）——此前「失效」判断同样是
-  GET 方法 bug 的误判**。客户端过滤方案已上线故暂不切换，但按周
-  远程查询可用它兜底。
-  HTTP 栈最终形态：reqwest + native-tls（系统 OpenSSL，与 Python
-  参考实现对齐）；wreq/BoringSSL 浏览器仿真系基于错误根因的尝试，
-  已回退（编译重且非必需）。UA 用诚实标识 `gnnuhub/<版本>`
-  （实验证明 UA/头组合完全无关）。
-- **（历史）课表接口 2026-09-18 下午起恒定返回 null**：
-  `xskbcx_cxXsgrkb.html` 对所有学期、所有形状（A-J 十组对照实验）
-  恒定 `null`，同日早些同形状实测成功过 9 门课；前端 JS 对
-  `data==null` 有显式处理（浏览器也显示空课表）。**「学校端课表服务变更/故障」的判断
-  已被推翻（真因是 GET 方法 bug，见上）**。代码已优雅降级
-  （parse 把 null → 空课表）。探针：
-  `cargo run --release -p gnnuhub-api --example probe_kb_null`。
-  单周课表 = `ClassSchedule::week_view(w)` 客户端过滤；周次解析
-  支持 `1-18周` / `7-13周(单)` / 多段逗号，不可解析保守返回 true。
-  `this_week()` 是唯一保留的 HTML 解析路径（当前周次无 JSON 接口）。
-
-- **正方 jqGrid 数据接口的通用规律（2026-09-18 补充）**：数据接口
-  常常就是菜单页面本身 + `?doType=query`；框架 `remoteParams` 注入
-  `zd_fzdm=<模块码>-<角色>`（学生 `-xs`），必须带上；jqGrid 分页参数
-  走 `queryModel.*` 重映射。已实测：考试安排（N358105，8 条真实记录，
-  **服务端不按 xnm/xqm 过滤、返回全部**）。全校课程（N255720）连通
-  但学期过滤参数疑似被忽略待查；等级考试（N2155，
-  `/cdjy/cdjy_cxKxcdlb.html?doType=query` + `zd_fzdm=N211205-kxcdlb`）
-  已还原未实测。
-
-## 验证码识别的现状（2026-09-18 更新）
-
-- **字库：70 条、覆盖 62 个字符（`0-9A-Za-z` 一个不缺）**
-  `logic/ocr/assets/bitmap_lib.json`，由 100 张真实样本构建。
-  样本目录 `captcha_samples/` 下的同名 json 只是**副本**，改动后要手动同步
-  （但代码一律读**内嵌资产库**，副本仅供人工查阅——早期踩过「改了资产库
-  却发现没生效」的坑，就是读了副本）。
-- **实测准确率：修正标签后累计 72/72 = 100%，最近 16 轮零漏识零模糊**
-  | 运行 | 轮数 | 正确 | 错误 | 未识别 | 准确率 |
-  |---|---|---|---|---|---|
-  | 修正前 | 20 | 17 | 3 | 0 | 85% |
-  | 修正后 | 18 | 18 | 0 | 2 | 100% |
-  | 确认 | 38 | 38 | 0 | 2 | 100% |
-  | 最近 | 16 | 16 | 0 | 0 | 100% |
-- **运行方式**（正确密码模式，唯一能连续跑量的路径）：
-  ```bash
-  GNNU_STUDENT_ID=250710078 GNNU_PASSWORD='<正确密码>' \
-    cargo run --release -p gnnuhub-api --example ocr_verify -- 16 captcha_samples/verify4.json
-  ```
-  密码只从环境变量读，**绝不写进代码或提交**。
-- 字形级基准：`cargo run --release -p gnnuhub-ocr --example bench_bitmap`
-  → 400/400 = 100%（精确 396、模糊 4），100 张整图全过。
-
-### 只有一条识别路径（2026-09-18 定稿）
-
-**已删除 tesseract、ManualOcr、FailoverOcr、ChainOcr、InteractiveFn
-以及 `tesseract` feature。** 位图查表实测 100%，再挂更差的兜底只会
-引入「猜错」这一新失败模式——猜错的字符会被拿去登录、白耗一次尝试。
-**未命中就报错，绝不猜。**
-
-- `Client::login(student_id, password, ocr)` —— 3 个参数，没有交互回调
-- `BitmapOcr::recognize(&self, image_base64)` —— `recognize_image` 已合并
-- 误删警告：**模糊匹配（距离 ≤2）不是「另一种方式」**，它针对同一字符
-  在亚像素定位下的 1~3 像素抖动，最终落到同一字符。真值验证里它兜住了
-  4/400 的变体，删掉会直接掉准确率。
-- **未命中的错误信息是可粘贴的**：`Error::Image` 带完整宽高 + 按 `rows`
-  原始格式分行的位串，可直接补进 `bitmap_lib.json`。不要把位串截断——
-  截断后还得重新提取一遍才知道缺什么。
-- 识别失败**不消耗重试**：那是本地问题（字库缺条目），重试只会再取一张
-  同样可能不认识的图。真正该重试的是服务端判定 `CODEFALSE`。
-
-### 两个必须记住的诊断信号
-
-1. **「字形级 100% 但整图准确率偏低」= 字库漏字符或标错字符**，
-   不是提取器坏了。实测掉到 85% 时字形级仍是 100%，因为漏掉的字符
-   根本没被试到。修复顺序：先查字库覆盖，再怀疑提取。
-2. **同一字符会有多个抗锯齿抖动变体**：亚像素定位让同一字符渲染出
-   差 1~3 像素的点阵，差异集中在笔画端点的拐角。实测
-   `Q/Y/e/u/v/w/x/m` 各有 2 条。这类条目**价值高但存在感低**，
-   被重建脚本覆盖时准确率只掉一点点，容易当成正常波动放过。
-
-### 给字形定标的纪律（0/O 事故的直接教训）
-
-- **绝不用「最近邻」当标签证据**：标签本身错了，最近邻也会自信地指错。
-  曾把 `9x13 88px` 圆环标成 `O`（实为零）、`8x13 47px` 竖条标成 `L`
-  （实为一），导致「只要真值含 0 或 1 必然读错」。
-- 至少要 **两重独立证据**才敢定标，可用来源：
-  - **几何高度**是区分大小写的硬约束：cap-height `y0=5`(h≈13)、
-    x-height `y0=8`(h≈10)、ascender `y0=4`(h≈14)、降部底 `y=22`。
-    高度 10 的字形**不可能**是 `0`（full-height 9x13）。
-  - **距离排名要有断层**：新收 `x` 变体对 `x` 距离 3、次近 `e` 距离 45，
-    这种 3 vs 45 的差距才可信；若前两名只差 1~2 就要另找证据。
-  - tesseract 整图读数（但**它会误读**：把 `x` 的圆腰读成 `0`，因为
-    x-height 在粗粒度下像零——必须用几何高度交叉否决）。
-  - Java AWT 渲染探针（`.scratch/probe/RenderGlyph.java`，可指定字体/字号，
-    输出逐像素位串）。注意**服务端字体不等于本机字体**：
-    实测服务端是 DejaVu Sans 常规体字号约 18，本机 Tahoma 渲染不出
-    `10x10` 的 `x`。
-- **新字形入库必须配一条回归测试**，把位串原样内嵌点名
-  （见 `tests/real_samples.rs` 的 `harvested_antialias_variants_still_resolve_exactly`）。
+- **100×25 RGBA，4 位，`0-9A-Za-z` 大小写混用**，开抗锯齿，有噪点。
+  服务端字体 = DejaVu Sans 常规体字号约 18。字形渲染**确定性**：
+  同一 (字符,字号) 逐像素相同 → **位图查表是唯一识别路径**。
+- **只有一条识别路径（定稿）**：已删除 tesseract、ManualOcr、FailoverOcr、
+  ChainOcr。位图查表实测 100%（72/72，含模糊匹配兜住 4/400 变体），
+  **未命中就报错，绝不猜**——猜错会拿去登录白耗一次尝试。
+  `Client::login(student_id, password, ocr)`；`BitmapOcr::recognize(image_base64)`。
+- 字库：70 条覆盖 62 字符，`logic/ocr/assets/bitmap_lib.json`（内嵌资产）。
+  `captcha_samples/` 下同名 json 只是副本，代码只读内嵌资产库。
+  错误信息可粘贴：`Error::Image` 带完整宽高位串，直接补进 json。
+  识别失败**不消耗重试**（本地问题），该重试的是 `CODEFALSE`。
+- 提取要点：按颜色就近+保留边缘（非严格相等）；噪点是独立连通块，
+  保留 ≥8 像素可分离 4 字符；**但 i/j 的点是小块，必须按 x 重叠 +
+  主干上方合并回**，否则 i/l 混淆；槽位固定 `(0,20)(21,46)(47,73)(74,99)`。
+- **诊断信号**：字形级 100% 但整图偏低 = 字库漏字符或标错，不是提取器坏。
+  同一字符有 1~4 种抗锯齿抖动变体（`Q/Y/e/u/v/w/x/m` 各 2 条）。
+- **定标纪律（0/O 事故教训）**：绝不用最近邻当标签证据，至少两重独立证据
+  （几何高度硬约束：cap-height y0=5/h13、x-height y0=8/h10、ascender y0=4/h14、
+  降部底 y=22；距离排名要有断层；tesseract 整图读数需几何交叉否决）。
+  新字形入库必须配回归测试点名位串（`tests/real_samples.rs`）。
+- 字库空间 Chao1 估计 ≈67（基于 60 样本的下界参考）。长尾收割：跑
+  `ocr_verify` 后查 `kind=="miss"` 条目。
 
 ## 踩过的坑
 
-- **字段 id 极易数错字符**：政治面貌的真实 id 是 `col_zzmmm`（**两个 z**，
-  是「政治面貌」的拼音首字母 z-z-m-m-m），不是 `col_zzzmmm`。教训：
-  一律用 `grep -o 'id="col_[^"]*"'` 机器提取，别用肉眼数。
-  `tests/real_page_check.rs` 里有一条测试专门守着这一点。
-- 不要给 reqwest 开 `cookie_store(true)`：会与手动设置的 COOKIE 头叠加，
-  发出两个同名 `JSESSIONID`，服务端判定异常后直接关闭连接。
-- `/tmp` 在工具调用之间不持久，临时脚本放项目内 `.scratch/`（已 gitignore）。
-- **`/tmp` 是 10M 的 tmpfs，装不下编译中间产物**：`ring` crate 编译时会报
-  `No space left on device`（写 `/tmp/*.s` 汇编临时文件失败）。
-  **构建前必须 `export TMPDIR=<项目内目录>`**，例如
-  `export TMPDIR=$PWD/.scratch/tmp`。这不是代码问题，别去改依赖。
-- 沙箱里 `python3 - << 'PYEOF'` 形式的 heredoc 容易被破坏，改为写脚本文件再执行。
-- **不要靠肉眼看 8~13px 点阵给字形标注**：此路已失败三次，每次都有明确错误
-  （把 `Z` 看成 `3`、`D` 看成 `G`、`6` 看成 `a`、`R` 看成 `b`）。低分辨率点阵
-  的笔画差异不足以可靠区分字形，必须引入其他信息源（真实标注、或询问用户）。
-  例外：**放大到 ASCII 图后**、且字形尺寸 ≥8x13 时是可靠的；只有
-  `w<=3` 的窄竖条（I/l）仍不可判。
+- 字段 id 极易数错：政治面貌是 `col_zzmmm`（两个 z）。一律
+  `grep -o 'id="col_[^"]*"'` 机器提取，`tests/real_page_check.rs` 守着。
+- 灰度化要复现 PIL（若将来再接 OCR 引擎）：BT.601 系数 + 四舍五入
+  `(...+500)/1000`，有回归测试守着。
+- 不要靠肉眼标 8~13px 点阵（失败三次）；放大 ASCII 图后 ≥8x13 可靠，
+  仅 I/l（w≤3 窄竖条）不可判——DejaVu Sans 下 I 与 l 逐像素相同。
+- 沙箱里 python heredoc 易被破坏，写脚本文件再执行。
 
 ## 待办
 
-- 学籍字段扩展：JSON 源已具备 64 键，模型按需挑选（对照表
-  `tools/js-recon/out/verification.md` 附一 + 5.2 节）
-- `fetch_basic_info` / `timetable`（`xskbcx_cxRjc` 输入格式未核实）——JSON 化候选
-- **成绩查询：卡在账号数据上，不是代码上**（见下方「成绩查询接口」）
-- 界面层框架未选（用户明确表示稍后再定）
+- 学籍字段扩展（JSON 源 64 键，对照表 `tools/js-recon/out/verification.md`）
+- `fetch_basic_info` / `timetable` JSON 化候选
+- 成绩查询卡在账号数据上（非代码问题）
 
-## 成绩查询接口（2026-09-18 实测：暂不可用）
+## 2026-09-21 代码优化重构
 
-**结论：该账号下接口恒定返回固定空信封，已停止调参。**
-重新验证用 `cargo run --release -p gnnuhub-api --example probe_grade`。
-module doc 里列了「已排除的 7 种假设 + 各自证据」，别再重走。
-
-### 逆向到的、值得记住的事实
-
-- **菜单 URL ≠ 数据接口**。`clickMenu('N305005', '/cjcx/cjcx_cxDgXscj.html')`
-  给的是**页面**地址；页面自带的 `cxDgXscj.js:230` 真正发查询时按 `jsxx` 二选一：
-  `jsxx=="xs"` → `/cjcx/cjcx_cxXsgrcj.html`，否则 → `cjcx_cxDgXscj.html`。
-  推而广之：**任何 `clickMenu` 的路径都要去对应 JS 里确认是不是真正的接口**。
-- **学生侧不发 `xh_id`**。`cxDgXscj.js` 里 `xh_id`/`kkxb_id`/`kkbm_id` 等
-  一大串全在 `if ($("#jsxx").val() != "xs")` 分支内；学生身份由服务端
-  会话的 `yhm` 决定。传 `xh_id` 会被**静默忽略**（这是早期误判的根源）。
-- **jqGrid 的参数名被框架重映射**（`jquery.jqgrid.settings.js:99-104` 的
-  `prmNames`）：`rows→queryModel.showCount`、`page→queryModel.currentPage`、
-  `order→queryModel.sortOrder`、`sort→queryModel.sortName`。
-  **没有 `sidx`/`sord`/`nd`/`_search`**。全站列表接口大概率共用这套设置。
-  另有 `jsonReader.root="items"`、`mtype='POST'`、
-  `rowNum = parseInt($("#pageNumber").val() || 15)`。
-- **及格判定只能用 `bfzcj`（百分制原始分）**，不能只用 `cj`：
-  补考/重修后 `cj` 会变成折算值，前端也是拿 `bfzcj < 60` 判红。
-  `cj` 为文本时（「优秀」「合格」）走白名单，且**否定词优先**
-  （否则「不合格」会被「合格」匹配上）。
-- 成绩页字段全清单（22 可见 + 13 隐藏）在 `cxDgXscj.js` 的
-  `getGridColModel()`，中文标签在 `js_globalweb_comp_i18n_N305005_zh_CN.js`。
-  两者都已存档，**无需再发请求**。
-
-### 判定「接口是不是被我调坏了」的方法
-
-别反复试参数，做**非法值对照**：同一接口发一组非法参数（如
-`xnm=9999&xqm=99`）与一组合法参数，比较**信封指纹**
-（`limit`/`pageSize`/`showCount`/`totalResult`）。
-若完全相同，说明服务端没读这些字段/对所有输入一视同仁，
-问题不在参数上。`probe_grade.rs` 里已实现 `envelope_fingerprint()`。
-
-### 长尾收割（优先级低）
-
-Chao1 估计「字库空间约 67 条」时基于 60 张样本；现已有 100 张、70 条。
-剩余 miss 只在长尾。如要继续，跑 `ocr_verify` 若干轮后检查 json 里
-`kind == "miss"` 的条目。
+见当日日志。核心：api crate 按域拆模块（`model`/`endpoints`/`parse` 内分
+`student`/`schedule`/`exam`/`misc` 等），公共 HTTP 参数构造收敛，
+examples 全部按用途归目录，删除已废弃探针。行为不变，三件套全绿。
