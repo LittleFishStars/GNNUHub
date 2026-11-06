@@ -1,19 +1,38 @@
-# Rust 构建产物
-/target/
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.vscode/
+.gnnu-hub-home/
+.home/
+.tmp/
+.toolchains/
+
+# Android 本地配置（可能含签名口令，切勿提交）
+android/local.properties
+android/key.properties
+*.jks
+*.keystore
+android/.gradle/
+android/gradle/wrapper/gradle-wrapper.jar
+android/app/debug/outputs/
+android/app/release/outputs/
+
+# Rust legacy 构建产物
+legacy/rust/target/
 **/*.rs.bk
 *.pdb
 
-# 依赖锁文件（库项目建议提交，见下方注释）
-# Cargo.lock 保留以固定依赖版本
-
-# 编辑器
-.vscode/
-.idea/
+# 编辑器 / 操作系统
 *.swp
 *.swo
 *~
-
-# 操作系统
 .DS_Store
 Thumbs.db
 
@@ -24,12 +43,10 @@ Thumbs.db
 credentials.json
 secrets.toml
 
-# 测试与调试产物
+# 调试时产生的临时文件（验证码图片、票据、Cookie jar 等）
 /captcha_sample*.png
 /captcha_grid*.png
 /cap.json
-
-# 调试时产生的临时文件（验证码图片、票据、Cookie jar 等）
 /captcha_login.png
 /captcha_state.json
 /cap_probe.png
@@ -49,7 +66,7 @@ secrets.toml
 .Trash-*/
 
 # 前端抓包产物（体积大，按需重新抓取）
-/tools/js-recon/out/
-/tools/js-recon/captcha.png
-/tools/js-recon/captcha.txt
+/legacy/rust/tools/js-recon/out/
+/legacy/rust/tools/js-recon/captcha.png
+/legacy/rust/tools/js-recon/captcha.txt
 /.scratch/

@@ -1,6 +1,6 @@
 # GNNUHub
 
-赣南师范大学教务系统接口的 Rust 重新实现。
+赣南师范大学教务系统接口的 **Flutter** 重新实现。
 
 > 仅供学习交流使用，请自觉遵守国家相关法律法规，谨慎使用。
 > 任何因使用本项目造成的后果均与作者无关。
@@ -9,247 +9,129 @@
 
 ## 项目定位
 
-本项目将学校教务系统的接口重新打包为 Rust 库。整个仓库分为**逻辑**与
-**界面**两大块，界面再按平台细分实现：
+整个仓库是标准 Flutter 工程，按「逻辑 → 界面」分层：
 
-- **逻辑（`logic/`）**：加密、登录、接口调用、数据解析与应用用例，
-  全部编译为平台无关的库
-- **界面（`ui/`）**：各平台的 UI 实现（当前为 Tauri 桌面端），
-  只依赖逻辑层的应用服务，不直接触碰接口客户端
+- **`lib/core/`**：领域模型、错误枚举、主机常量（无网络依赖）
+- **`lib/crypto/`**：复刻前端 JS 的 RSA 加密（密码与 `loginUserToken`）
+- **`lib/ocr/`**：位图查表验证码识别（内嵌字库，72 条 / 62 字符）
+- **`lib/api/`**：CAS 登录、SSO 三跳、请求节流、Cookie 显式管理、
+  HTML/JSON 解析、会话缓存与业务接口
+- **`lib/service/`**：UI 无关的应用服务层（UI 唯一入口）
+- **`lib/state/`**：本地轻量持久化（记住学号与学期）
+- **`lib/ui/`**：Flutter 界面（登录 + 7 个功能页，FlClash 风格）
 
-## 目录结构
+旧的 Rust/Tauri 实现完整保留在 [`legacy/rust/`](legacy/rust/README.md)
+作为参考，不参与构建。
 
-```
-GNNUHub/
-├── Cargo.toml                  # 工作区配置（分层规则见其中注释）
-├── logic/                      # 逻辑：按业务功能划分
-│   ├── core/                   # gnnuhub-core：核心类型、错误、常量
-│   ├── crypto/                 # gnnuhub-crypto：RSA 密码与令牌加密
-│   ├── ocr/                    # gnnuhub-ocr：验证码识别（位图查表）
-│   ├── api/                    # gnnuhub-api：教务系统接口客户端
-│   │   ├── src/                # 登录、会话、解析
-│   │   ├── examples/           # 可运行的调试与抓取工具
-│   │   └── tests/              # 真实页面回归测试与夹具
-│   └── service/                # gnnuhub-service：UI 无关的应用服务层
-├── ui/                         # 界面：按平台划分实现
-│   └── desktop/                # gnnuhub-desktop：Tauri 2 桌面客户端
-└── tools/
-    ├── captcha-collector/      # 验证码样本采集脚本（Python）
-    └── js-recon/               # 前端资源离线逆向（抓取 + 分析）
-```
+## 界面与功能
 
-### 各 crate 职责
+| 页面 | 数据 | 说明 |
+|---|---|---|
+| 登录 | CAS + 验证码自动识别 | 验证码由内嵌字库识别，识别错自动换码重试 |
+| 课表 | `xskbcx_cxXsgrkb` | 学年/学期/周次选择、周网格视图、当前周跳转 |
+| 考试 | `kscx_cxXsksxxIndex` | 全量考试记录（服务端不按学期过滤） |
+| 重修 | `cxkccx_cxCxkccxIndex` | 全库 4312 条，本地按名称/代码/学院过滤 |
+| 通知 | `index_cxNews` | 通知列表、系统提醒、详情正文（图片内联标注） |
+| 学业 | `xsxyqk_cxKczxAllIndex` | 按课程性质分组 GPA + 学分加权总绩点 + 校历 |
+| 教室 | `cdjy_cxKxcdlb` | 日期/时段/楼栋/类别筛选，网格展示空闲场地 |
+| 学籍 | 首页 + 学籍 JSON（失败回退 HTML） | 三源合并，字段逐次补齐 |
 
-| crate | 职责 | 依赖 |
-|-------|------|------|
-| `gnnuhub-core` | 数据模型（课表、学生信息）、错误枚举、主机常量 | 无网络依赖 |
-| `gnnuhub-crypto` | 复刻前端 JS 的 RSA 加密，用于密码与 `loginUserToken` | `num-bigint` |
-| `gnnuhub-ocr` | 验证码识别（位图查表） | `image`、`base64` |
-| `gnnuhub-api` | 登录流程、会话管理、接口调用与解析 | `reqwest`、`scraper` |
-| `gnnuhub-service` | 应用用例与会话生命周期，错误分类（UI 唯一入口） | `gnnuhub-api` |
-| `gnnuhub-desktop` | Tauri 2 桌面端，把服务层命令暴露给前端 | `gnnuhub-service` |
+> 成绩查询暂不提供：成绩接口对测试账号恒定返回空信封（无法实测），
+> 项目纪律是「无法实测的接口不转正」，见 `legacy/rust/logic/api/examples/probe_grade.rs`。
 
-> 分层规则：`ui/` 下的实现**只允许依赖 `gnnuhub-service`**，
-> 详见 `logic/service/src/lib.rs` 的模块文档。
+## 视觉规范
+
+参照 FlClash 界面体系（[`lib/ui/theme.dart`](lib/ui/theme.dart)）：
+
+- **填充色阶画层级，不用边框**：输入框、卡片、条件按钮全部是圆角填充块
+- **颜色只给状态**：错误、置顶、补考、未开班等才用彩色容器
+- **阴影只给浮层**：对话框、菜单、SnackBar 有 elevation，卡片为 0
+- **大圆角**：卡片 18、输入/按钮 14、条件块 12
+- **多用图标代替文字**：统一使用 MIT 许可的 Lucide 线型图标库
+  （`lucide_icons_flutter`），线宽/尺寸档统一，不混用风格
+- 亮/暗双主题，窄屏底部导航（`NavigationBar`）、宽屏侧边导航（`NavigationRail`）
 
 ## 技术选型
 
 | 方面 | 选择 | 说明 |
-|------|------|------|
-| 版本 | Rust 2024 edition | 需要 1.85+ |
-| 异步运行时 | `tokio` | 多线程运行时 |
-| HTTP | `reqwest` | 使用 `rustls-tls`，不依赖系统 OpenSSL |
-| HTML 解析 | `scraper` | 基于 `html5ever` |
-| 大数运算 | `num-bigint` | RSA 模幂 |
-| 图像处理 | `image` | 验证码解码与预处理 |
-| 错误处理 | `thiserror` | 库对外统一错误类型 |
+|---|---|---|
+| 框架 | Flutter 3.47.9 / Dart 3.13 | 一套代码覆盖 Android / Linux 桌面 |
+| HTTP | `dio` | 手动管理重定向（`followRedirects=false`）与 Cookie |
+| HTML | `html` | 解析服务端渲染页面（通知、学籍、校历） |
+| 图像 | `image` | 验证码 PNG 解码（不做灰度、不做缩放） |
+| 状态 | `provider` | `HubService` 继承 `ChangeNotifier` |
+| 图标 | `lucide_icons_flutter` | MIT，统一线型 |
 
-## 接口分析
+### 关键移植约束（务必保留）
 
-### 登录流程
-
-教务系统通过统一身份认证平台（CAS）接入，完整链路分四步：
-
-```
-① GET  cas.gnnu.edu.cn/lyuapServer/kaptcha?id={random}
-        → { kaptchaType, uid, content(base64 图片), timeout }
-
-② POST cas.gnnu.edu.cn/lyuapServer/v1/tickets
-        表单: username / password(RSA加密) / service / code / id(用上一步的 uid)
-        → 成功: { tgt, ticket }
-        → 失败: { meta: {...}, data: { code: "CODEFALSE" } }
-
-③ 带着 ticket 进入教务系统，共 3 跳换取会话：
-
-   GET /sso/lyiotlogin?ticket=ST-xxx      （裸请求，不带 Cookie）
-        → 302 /sso/lyiotlogin
-        Set-Cookie: JSESSIONID=<A>          种在 /sso 下
-   GET /sso/lyiotlogin                    （带 <A>）
-        → 302 /ticketlogin?uid=...&verify=...
-   GET /ticketlogin?uid=...&verify=...    （带 <A>）
-        → 302 /xtgl/login_slogin.html
-        Set-Cookie: JSESSIONID=<B>          这才是可用会话，种在 / 下
-```
-
-### 关键细节
-
-**必须停在 `login_slogin` 之前。** 第 3 跳的 `Set-Cookie` 已经给出根作用域的
-有效 `JSESSIONID`，会话此时即告成立。若继续跟随到 `/xtgl/login_slogin.html`，
-服务端会**直接关闭 TLS 连接**（实测报 `peer closed connection without sending
-TLS close_notify`）——这是针对「已持有会话却重放登录页」的稳定行为拦截，
-不是网络抖动，重试也无效。
-
-**后续请求必须同时携带 `JSESSIONID` 与 `SF_cookie_17`。** 后者由网关下发并与
-会话绑定。实测对 `/xtgl/index_cxYhxxIndex.html` 的结果：
-
-| 携带内容 | 结果 |
-|---|---|
-| 仅 `JSESSIONID` | 302，会话不生效 |
-| `JSESSIONID` + `SF_cookie_17` | **200，取到真实页面** |
-| 再加 `rememberMe=deleteMe` | 连接被直接关闭 |
-
-**同名 Cookie 有作用域之分。** `/sso` 下的 `JSESSIONID` 只在链路中途必需，
-最终应以根作用域那份为准；`rememberMe=deleteMe` 这类删除标记必须在解析阶段剔除。
-
-**验证码申请与提交的 id 不是同一个值。** 申请时传入的 `id` 是客户端随机数，
-但接口响应里会返回一个服务端生成的 `uid`，提交登录时必须使用 `uid`。
-原 Python 实现在 `Captcha` 类中误用了请求时的 id。
-
-**`Host` 头覆盖只对认证平台有效。** CAS 接口所在的反向代理只认
-`Host: cas.gnnu.edu.cn`，用默认推导值会被拒绝；但该头部若被复用到教务系统
-等其他域名的请求上，会造成 Host 与 SNI 不匹配，服务端直接关闭 TLS 连接。
-因此 `Client::cas_headers()` 返回的头部**不可跨域复用**。
-
-**`csrftoken` 无需携带。** 实测课表与学籍查询接口均不校验它。
-
-**验证码特征**（基于实际抓样的分析）：
-
-| 属性 | 值 |
-|------|-----|
-| 尺寸 | 100 × 25 px |
-| 字符数 | 4 |
-| 字符集 | 字母数字混合，**大小写混用** |
-| 颜色 | 每个字符颜色随机且不同，白底 |
-| 干扰 | 无旋转、无扭曲、无干扰线 |
-| 有效期 | 300 秒 |
-
-由于字符颜色随机，识别前必须先灰度化丢弃颜色信息。
-
-### 已实现的接口
-
-| 方法 | 说明 | 原 Python 对应 |
-|------|------|----------------|
-| `fetch_basic_info` | 姓名、身份、学院、班级、头像 | `_get_basic_info` |
-| `fetch_student_info` | 学籍详细信息 | `_get_student_info` |
-| `student_info` | 合并后的完整信息 | `get_all_info` |
-| `class_schedule` | 课表（整学期或单周） | `get_class_schedule` |
-| `course` | 指定课程的开课信息 | `get_course` |
-| `timetable` | 节次时间表 | `get_timetable` |
-| `this_week` | 当前教学周 | `this_week` |
-| `current_week_schedule` | 本周课表（`this_week` + `class_schedule` 组合） | — |
-| `fetch_raw` | 按原样抓取站内路径，用于离线逆向 | — |
-
-### 已知限制
-
-- **课表单周接口未验证**：`class_schedule(term, Some(week))` 走的移动端接口
-  `/kbcx/xskbcxMobile_cxXsKb.html` 尚未实测。
-- **学籍字段仅映射 12 个**：页面实际提供 84 个字段，完整对照表见
-  `tools/js-recon/out/verification.md` 附一，可按需扩展。
-- **成绩查询尚未实现**。
-
-### 验证码识别
-
-只有一条路径：**位图查表**。服务端的字形渲染是确定性的——同一
-`(字符, 字号)` 组合在不同图片、不同颜色下产生逐像素相同的点阵，因此识别
-退化成查表，准确率上限只取决于字库覆盖度。
-
-- 字库内嵌于 `logic/ocr/assets/bitmap_lib.json`（70 个字形、
-  覆盖 `0-9A-Za-z` 共 62 个字符），在 100 张真实样本上**字形级
-  400/400 = 100%**、整图 100/100 = 100%。
-- **真值实测 72/72 = 100%**（用真实登录验证识别对错，工具见
-  `examples/ocr_verify.rs`）。
-- **未命中时直接报错，不做任何猜测**：错误信息里带上真实的宽高与完整位串，
-  可原样粘进字库补充。之所以不让通用 OCR 兜底——猜错的字符会被拿去登录，
-  白耗一次尝试；报错是零成本的。
-
-> 早期还挂过 tesseract 作为兜底，现已移除。真值验证显示查表已达 100%，
-> 而 tesseract 对这类抗锯齿彩色验证码只有 78%，一个更差的兜底只会引入
-> 「猜错」这一新的失败模式。
-
-## 与 Python 参考实现的差异
-
-原项目 [GNNU_API](https://github.com/LittleFishStars/GNNU_API) 是本次重写的参考，
-以下是重写过程中修正的问题：
-
-| 问题 | 原实现 | 本实现 |
-|------|--------|--------|
-| 验证码错误重试 | 递归调用，无上限，可能栈溢出 | 有界循环，可配置次数 |
-| SSO 跳转 | `while True`，无上限 | 有界循环 + 目标域校验 + 明确的停止点 |
-| 验证码 uid | 误用请求 id | 使用响应返回的 uid |
-| Barrett 类 | 名为 Barrett，实为直接 `pow()` | 移除伪实现，直接用 `num-bigint` |
-| 错误处理 | 返回元组，语义模糊 | 统一 `Error` 枚举 |
-| 个人信息缓存 | 各字段独立 `if` 判断，重复请求 | 统一状态，一次拉取 |
+1. **HTTP 方法不可统一**：课表/节次/考试/重修/GPA/教室/学籍 JSON 是
+   POST（query + form），首页资料/校历/通知/教学周是 GET。历史上把
+   `send` 写死 GET 导致课表恒返回 `null`。
+2. **Cookie 全部显式管理**：不启用 cookie jar，避免两个同名
+   `JSESSIONID` 叠加导致服务端直接断开连接；`rememberMe=deleteMe`
+   必须在解析阶段剔除。
+3. **SSO 三跳**：第 1 跳裸请求带 `ticket`，拿到根作用域
+   `JSESSIONID` 后立即停止，**不要请求 `login_slogin.html`**。
+4. **请求节流 600ms**：服务端有 SafeDog WAF，突发请求会封 IP；
+   节流需持锁跨等待、失败不更新时间戳。
+5. **账号锁定（`USERLOCK`）绝不可重试**：继续提交只会加重锁定；
+   `retrySafe(HubError)` 提供统一判据。
+6. **验证码 OCR**：8 邻域连通域 + i/j 点合并 + 包围盒裁剪 +
+   汉明距离 ≤2 模糊匹配。没有灰度化、没有缩放、没有平移容差搜索
+   （注释与实现不一致时以代码为准）。
+7. **`xqm` 约定**：第一学期 = `3`、第二学期 = `12`（不是 1/2）。
+8. 表单编码用 `application/x-www-form-urlencoded`（空格→`+`），
+   `lib/api/client.dart` 的 `encodeForm` 手工拼接以对齐 reqwest。
 
 ## 开发
 
-### 环境要求
-
-- Rust 1.85+（edition 2024）
-- 无需系统 OpenSSL（使用 rustls）
-
-### 常用命令
-
 ```bash
-# 编译
-cargo build
+# 首次：安装依赖
+flutter pub get
 
-# 运行测试（含真实页面回归测试）
-cargo test --workspace --all-targets
+# 静态分析 + 测试（60 个用例，含 RSA 对拍与验证码真实样本回归）
+flutter analyze
+flutter test
 
-# 静态检查（CI 以此为门槛）
-cargo clippy --workspace --all-targets -- -D warnings
+# 运行（Linux 桌面 / Android 设备）
+flutter run -d linux
+flutter run -d <android-device>
 
-# 格式检查
-cargo fmt --all --check
-
-# 文档
-cargo doc --open
+# 构建
+flutter build linux --release
+flutter build apk --release
 ```
 
-### 验证码样本采集
+Linux 桌面构建需要 `gtk3`、`webkit2gtk-4.1`（Arch 包名）与标准
+CMake/Ninja 工具链；Android 构建需要 Android SDK。
 
-`tools/captcha-collector` 用于批量抓取验证码，为后续训练字型库做准备：
+## 分层规则
+
+`lib/ui/` 下的实现**只允许依赖 `lib/service/`**（加上
+`lib/core/model.dart` 的领域模型），不要绕过服务层直接调用
+`lib/api/`——否则会话状态、登录流程与错误分类就会在每个 UI 里
+各自为政、越写越散。
+
+展示层面的决定（错误文案如何呈现、重试按钮是否可用）由 UI 自行处理；
+`retrySafe` 提供统一的「重试是否有害」判据。
+
+## 礼仪
+
+教务系统前置了 SafeDog WAF，会因突发请求封禁来源 IP。客户端默认
+对请求做 600ms 节流，**请勿关闭**，也请勿在无必要时反复登录试探接口。
+
+## 构建环境说明（只读 HOME）
+
+标准 Flutter 工程可直接 `flutter pub get && flutter build ...`。若 HOME 只读
+（如沙箱环境），仓库附带 [`scripts/flutter-env.sh`](scripts/flutter-env.sh) 与
+[`scripts/build.sh`](scripts/build.sh)：把 `HOME`、`PUB_CACHE`、
+`GRADLE_USER_HOME`、`ANDROID_SDK_ROOT`、`ANDROID_USER_HOME` 全部重定向到
+工作区内，并锁定 JDK 21（Gradle 9.3.1 的 Groovy 不支持 Java 27 的
+class major 71）。Android SDK 镜像复用系统组件，另需 NDK 28.2.13676358、
+`platforms;android-35` 与 CMake 3.22.1（分别对应 Flutter 插件默认 NDK
+版本、`jni` 插件的 compileSdk 与 native 构建）。
 
 ```bash
-python3 tools/captcha-collector/collect.py --count 300 --out captcha_samples
+bash scripts/build.sh            # debug + release 两套 APK
+bash scripts/build.sh linux      # Linux 桌面版
 ```
-
-### 前端资源离线逆向
-
-登录逻辑（加密、跳转、Cookie 作用域、请求头要求）都写在前端 JS 里，
-读代码比反复发请求试探高效得多，也不会触发风控。抓取**只跑一次**，
-产物落盘后全部离线分析：
-
-```bash
-# 抓取（需凭据，会写 4.2 MB 左右的产物）
-GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
-  cargo run -p gnnuhub-api --example js_recon
-
-# 追加 once 参数可启用文件桥，在单进程内完成交互式验证码输入
-GNNU_STUDENT_ID=xxx GNNU_PASSWORD='xxx' \
-  cargo run -p gnnuhub-api --example js_recon -- once
-
-# 离线分析（不联网）
-./tools/js-recon/analyze.sh
-```
-
-### 请求礼仪
-
-教务系统前置了 SafeDog WAF，会因**请求量**与**行为模式**封禁来源 IP。
-本项目默认对请求做节流（`ClientConfig::request_interval`，默认 600 ms），
-**请勿关闭**。调试接口时优先用 `js_recon` 抓一次前端资源做离线分析，
-而不是反复打接口试探。
-
-## 许可证
-
-MIT

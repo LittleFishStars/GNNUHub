@@ -1,0 +1,44 @@
+name: gnnuhub
+description: "赣南师范大学教务系统客户端（Flutter 重构版）"
+publish_to: "none"
+version: 0.2.0
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP 客户端：手动管理重定向与 Cookie（SSO 三跳交换需要）
+  dio: ^5.9.0
+
+  # HTML 解析（教务系统页面为服务端渲染 HTML）
+  html: ^0.15.6
+
+  # 验证码 PNG 解码
+  image: ^4.5.0
+
+  # 状态管理：ChangeNotifier + provider
+  provider: ^6.1.5
+
+  # 本地持久化（记住学号等）
+  shared_preferences: ^2.5.0
+
+  # 互斥锁（请求节流）
+  synchronized: ^3.4.0
+  # MIT 许可的开源图标库（统一线型/线宽，符合项目图标规范）
+  lucide_icons_flutter: ^3.0.0
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/ocr/bitmap_lib.json
