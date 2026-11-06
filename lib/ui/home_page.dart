@@ -14,6 +14,7 @@ import 'retake_page.dart';
 import 'room_page.dart';
 import 'schedule_page.dart';
 import 'widgets/panels.dart';
+import 'widgets/window_title_bar.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -75,20 +76,35 @@ class _HomePageState extends State<HomePage> {
     final wide = width >= 840;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'GNNUHub · ${service.loggedInAs ?? ''}',
-          style: const TextStyle(fontSize: 16),
-        ),
-        actions: [
-          IconButton(
-            tooltip: '退出登录',
-            icon: const Icon(LucideIcons.logOut, size: 19),
-            onPressed: _logout,
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
+      // 桌面端：自绘窗口控制条替代系统标题栏（Linux 壳已 set_decorated FALSE）；
+      // 移动端没有窗口概念，退出入口放到页面内容里。
+      appBar: needsCustomTitleBar
+          ? PreferredSize(
+              preferredSize: const Size.fromHeight(32),
+              child: WindowTitleBar(
+                leading: [
+                  IconButton(
+                    tooltip: '退出登录',
+                    icon: const Icon(LucideIcons.logOut, size: 16),
+                    onPressed: _logout,
+                  ),
+                ],
+              ),
+            )
+          : AppBar(
+              title: Text(
+                'GNNUHub · ${service.loggedInAs ?? ''}',
+                style: const TextStyle(fontSize: 16),
+              ),
+              actions: [
+                IconButton(
+                  tooltip: '退出登录',
+                  icon: const Icon(LucideIcons.logOut, size: 19),
+                  onPressed: _logout,
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
       body: Row(
         children: [
           if (wide)

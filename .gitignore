@@ -70,3 +70,5 @@ secrets.toml
 /legacy/rust/tools/js-recon/captcha.png
 /legacy/rust/tools/js-recon/captcha.txt
 /.scratch/
+# Widget Preview related
+.widget_preview/

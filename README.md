@@ -50,6 +50,10 @@
 - **多用图标代替文字**：统一使用 MIT 许可的 Lucide 线型图标库
   （`lucide_icons_flutter`），线宽/尺寸档统一，不混用风格
 - 亮/暗双主题，窄屏底部导航（`NavigationBar`）、宽屏侧边导航（`NavigationRail`）
+- **无系统标题栏**（Linux 桌面）：原生壳用 `gtk_window_set_decorated(FALSE)`
+  去掉 GTK/WM 标题栏，Flutter 侧只保留一条 32px 透明拖动区 + 右上角
+  最小化/最大化/关闭图标按钮（[`window_manager`](https://pub.dev/packages/window_manager)），
+  不显示标题文字、不画色块与边框；无边框窗口仍可用边缘拖拽缩放
 
 ## 技术选型
 
@@ -61,6 +65,7 @@
 | 图像 | `image` | 验证码 PNG 解码（不做灰度、不做缩放） |
 | 状态 | `provider` | `HubService` 继承 `ChangeNotifier` |
 | 图标 | `lucide_icons_flutter` | MIT，统一线型 |
+| 窗口 | `window_manager` | 桌面端隐藏系统标题栏、自绘窗口按钮与边缘缩放 |
 
 ### 关键移植约束（务必保留）
 

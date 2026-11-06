@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../core/error.dart';
 import '../service/hub_service.dart';
 import '../state/term_store.dart';
+import 'widgets/window_title_bar.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -69,6 +70,12 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      appBar: needsCustomTitleBar
+          ? const PreferredSize(
+              preferredSize: Size.fromHeight(32),
+              child: WindowTitleBar(),
+            )
+          : null,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),

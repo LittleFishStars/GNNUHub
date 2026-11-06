@@ -30,6 +30,9 @@ dependencies:
   # MIT 许可的开源图标库（统一线型/线宽，符合项目图标规范）
   lucide_icons_flutter: ^3.0.0
 
+  # 桌面窗口控制：隐藏系统标题栏、自绘窗口按钮（仅桌面生效）
+  window_manager: ^0.6.0
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:
